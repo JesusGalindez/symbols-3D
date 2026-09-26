@@ -1,40 +1,38 @@
 # symbols-3D
 
-**Símbolos chinos y textos convertidos en assets 3D `.glb` de laca roja, con geometría exacta y verificación contra la imagen original.**
+**Chinese symbols and text turned into red-lacquer 3D `.glb` assets, with exact geometry and verification against the source image.**
 
-*Turns Chinese symbols and text into red-lacquer 3D `.glb` assets: exact line-and-arc reconstruction, rounded bevels and a strict image-matching verifier.*
-
-![Galería de modelos](docs/galeria.png)
+![Model gallery](docs/galeria.png)
 
 ---
 
-## Qué hace
+## What it does
 
-A partir de una imagen plana de un sello, emblema o carácter chino (o de un texto y una fuente tipográfica), genera un modelo 3D listo para web, motores de juego o render:
+Takes a flat image of a seal, emblem or Chinese character (or a piece of text plus a font) and produces a 3D model ready for the web, game engines or rendering:
 
-- **Reconstrucción, no calco.** El trazo se redibuja con verticales, horizontales, arcos (cada uno con su centro ajustado) y rectas inclinadas. Cada cara de esa retícula se pinta por mayoría con la imagen, y un paso de corrección remienda lo que la retícula no explica. El resultado son bordes limpios, sin la escalera de píxeles de la imagen.
-- **Acabado uniforme.** Canto de cuarto de círculo delante y detrás, esquinas redondeadas (las que sobresalen a 1,3× el canto, las que entran a 0,6×), normales exactas en frente y dorso y material PBR de laca roja. Todos los símbolos comparten el mismo aspecto.
-- **Verificador estricto.** Cada modelo se compara con la imagen de origen antes de darse por bueno; si no aprueba, no se entrega.
-- **Tres versiones por símbolo:** detallada, ligera (galería) y web (comprimida con meshopt).
+- **Reconstruction, not tracing.** Strokes are redrawn from verticals, horizontals, arcs (each with its own fitted center) and slanted lines. Every face of that grid is filled by majority vote against the image, and a correction pass patches whatever the grid cannot explain. The result has clean edges, without the pixel staircase of the source.
+- **Uniform finish.** Quarter-round bevel on front and back, rounded corners (1.3× the bevel on convex corners, 0.6× on concave ones), exact front and back normals, and a red-lacquer PBR material. Every symbol shares the same look.
+- **Strict verifier.** Each model is compared with its source image before it is accepted; if it fails, it is not shipped.
+- **Three versions per symbol:** detailed, light (gallery) and web (meshopt-compressed).
 
-## Galería
+## Gallery
 
-| Modelo | Carácter | Significado | Modo | Parecido (IoU) |
+| Model | Character | Meaning | Mode | Similarity (IoU) |
 |---|---|---|---|---|
-| `shou-circular` | 壽 shòu | Longevidad | simetría doble | 0,9785 |
-| `shou-cruz` | 壽 shòu (estilizado) | Longevidad | `--simetria-ab` | 0,9839 |
-| `shou-sello` | 壽 shòu (sello de bandas) | Longevidad | `--simetria-lr` | 0,9756 |
-| `xi-doble` | 囍 shuāng xǐ | Doble felicidad | `--simetria-lr` | 0,9860 |
-| `fu-trazo` | 福 fú | Buena suerte | `--sin-simetria` | 0,9813 |
-| `fu-circular` | 福 fú (sello) | Buena suerte | `--sin-simetria` | 0,9749 |
-| `fu-hiragino` | 福 fú (fuente Hiragino Sans GB) | Buena suerte | letras | 0,9901 |
-| `amor` | AMOR (Avenir Next) | — | letras | 0,9893 |
+| `shou-circular` | 壽 shòu | Longevity | double symmetry | 0.9785 |
+| `shou-cruz` | 壽 shòu (stylized) | Longevity | `--simetria-ab` | 0.9839 |
+| `shou-sello` | 壽 shòu (banded seal) | Longevity | `--simetria-lr` | 0.9756 |
+| `xi-doble` | 囍 shuāng xǐ | Double happiness | `--simetria-lr` | 0.9860 |
+| `fu-trazo` | 福 fú | Good fortune | `--sin-simetria` | 0.9813 |
+| `fu-circular` | 福 fú (seal) | Good fortune | `--sin-simetria` | 0.9749 |
+| `fu-hiragino` | 福 fú (Hiragino Sans GB font) | Good fortune | text | 0.9901 |
+| `amor` | AMOR (Avenir Next) | "Love" in Spanish | text | 0.9893 |
 
-Todos aprueban el verificador. Tamaños orientativos: detallada 1–2,5 MB, ligera 220–630 KB, web 70–205 KB.
+All of them pass the verifier. Typical sizes: detailed 1–2.5 MB, light 220–630 KB, web 70–205 KB.
 
-## Instalación
+## Installation
 
-Requiere Python 3.12 y, para la versión web, Node.js (`npx`).
+Requires Python 3.12 and, for the web version, Node.js (`npx`).
 
 ```bash
 git clone https://github.com/JesusGalindez/symbols-3D.git
@@ -43,96 +41,98 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-## Uso
+## Usage
 
-### Símbolo desde una imagen
+### Symbol from an image
 
 ```bash
-# 1. Generar el modelo (elegir el modo según la simetría del dibujo)
+# 1. Build the model (pick the mode from the drawing's symmetry)
 .venv/bin/python tools/redibujar.py fuentes/X.png X [--simetria-ab | --simetria-lr | --sin-simetria]
 
-# 2. Verificar contra la imagen (código de salida 1 si falla)
-.venv/bin/python tools/verificar.py glb/X.glb fuentes/X.png --informe informe.png
+# 2. Verify against the image (exit code 1 on failure)
+.venv/bin/python tools/verificar.py glb/X.glb fuentes/X.png --informe report.png
 
-# 3. Versión ligera y versión web
-.venv/bin/python tools/redibujar.py fuentes/X.png X [modo] --ligera
+# 3. Light and web versions
+.venv/bin/python tools/redibujar.py fuentes/X.png X [mode] --ligera
 npx -y @gltf-transform/cli@4 optimize glb/X-ligera.glb glb/web/X-ligera.glb --compress meshopt --simplify false
 ```
 
-Cómo elegir el modo (IoU de la máscara con su reflejo):
+Choosing the mode (IoU of the mask with its mirror image):
 
-| Izquierda-derecha | Arriba-abajo | Opción |
+| Left-right | Top-bottom | Option |
 |---|---|---|
-| ≥ 0,97 | ≥ 0,97 | (ninguna): simetría doble |
-| < 0,95 | ≥ 0,97 | `--simetria-ab` |
-| ≥ 0,97 | < 0,95 | `--simetria-lr` |
-| < 0,95 | < 0,95 | `--sin-simetria` |
+| ≥ 0.97 | ≥ 0.97 | (none): double symmetry |
+| < 0.95 | ≥ 0.97 | `--simetria-ab` |
+| ≥ 0.97 | < 0.95 | `--simetria-lr` |
+| < 0.95 | < 0.95 | `--sin-simetria` |
 
-Funciona mejor con imágenes de **500 px o más**, en PNG, con fondo liso y sin marca de agua. Detecta el trazo por color rojo o, si no lo hay, por tinta oscura.
+Works best with images of **500 px or more**, as PNG, on a flat background and without watermarks. Strokes are detected by red color or, if there is none, by dark ink.
 
-### Letras y texto desde una fuente
+### Text from a font
 
 ```bash
 .venv/bin/python tools/letras.py "AMOR" amor --fuente "/System/Library/Fonts/Avenir Next.ttc" --indice 0
 .venv/bin/python tools/letras.py "福" fu-hiragino --fuente "/System/Library/Fonts/Hiragino Sans GB.ttc" --indice 2
 ```
 
-El texto sale centrado en el origen. `--separadas` genera además un modelo por letra y `--ligera` la versión de galería. Escribe `fuentes/<nombre>.png` con la silueta exacta de la fuente, que sirve para verificarlo igual que un símbolo. Usa estilos gruesos (Bold, Demi, Heavy): en los finos el redondeo se come el trazo.
+The text is centered on the origin. `--separadas` also writes one model per letter, and `--ligera` writes the gallery version. It writes `fuentes/<name>.png` with the font's exact silhouette, so text is verified just like a symbol. Use heavy weights (Bold, Demi, Heavy): with thin ones the rounding eats the stroke.
 
-### Visor
+### Viewer
 
 ```bash
 .venv/bin/python -m http.server 8791
-# abrir http://localhost:8791/visor.html?s=shou-cruz
+# open http://localhost:8791/visor.html?s=shou-cruz
 ```
 
-En macOS basta con doble clic en `ver.command`. Parámetros: `?s=<modelo>` y, opcionalmente, `&cam=x,y,z&mira=x,y,z` para fijar la cámara.
+On macOS, double-clicking `ver.command` does the same. Parameters: `?s=<model>` and, optionally, `&cam=x,y,z&mira=x,y,z` to fix the camera position and target.
 
-### Vídeo para redes
+### Social media video
 
-Vídeo vertical 1080×1350, 10 s y 30 fps con música tradicional china sintetizada (guzheng, xiao), sin licencias de terceros:
+Vertical 1080×1350 video, 10 s at 30 fps, with synthesized traditional Chinese music (guzheng, xiao) and no third-party licenses:
 
 ```bash
-.venv/bin/python video/musica.py                             # genera video/musica.wav
-.venv/bin/python video/exportar.py fu-hiragino               # fotogramas + MP4 (≈13 min)
-.venv/bin/python video/exportar.py fu-hiragino --solo-audio  # cambia solo la música, en segundos
+.venv/bin/python video/musica.py                             # writes video/musica.wav
+.venv/bin/python video/exportar.py fu-hiragino               # frames + MP4 (≈13 min)
+.venv/bin/python video/exportar.py fu-hiragino --solo-audio  # swap only the music, in seconds
 ```
 
-Necesita Google Chrome. La escena está en `video/fu-x.html`; el rótulo está escrito para 福 y hay que cambiarlo para otros símbolos.
+Requires Google Chrome. The scene lives in `video/fu-x.html`; its title card is written for 福 and must be changed for other symbols.
 
-## El verificador
+## The verifier
 
-`tools/verificar.py` proyecta el modelo de frente, lo registra con la imagen (escala ±1 % y traslación) y exige:
+`tools/verificar.py` projects the model from the front, registers it with the image (±1 % scale and translation) and requires:
 
-| Criterio | Umbral |
+| Criterion | Threshold |
 |---|---|
-| Parecido global (IoU) con la imagen tal cual | ≥ 0,97 |
-| Contorno: percentil 95 de la distancia | ≤ 0,3 % del diámetro |
-| Contorno: distancia máxima | ≤ 0,8 % del diámetro |
-| Mayor zona de discrepancia | ≤ 0,02 % del área |
-| Piezas y huecos | iguales que en la imagen |
-| Malla | cerrada, con canto en todas las piezas, normales exactas y material `laca` |
+| Overall similarity (IoU) with the raw image | ≥ 0.97 |
+| Contour: 95th percentile distance | ≤ 0.3 % of the diameter |
+| Contour: maximum distance | ≤ 0.8 % of the diameter |
+| Largest discrepancy region | ≤ 0.02 % of the area |
+| Pieces and holes | same as the image |
+| Mesh | watertight, beveled pieces, exact normals, `laca` material |
 
-Contorno y zonas se miden contra la imagen **con el mismo redondeo de esquinas aplicado**: el acabado no cuenta como error y todo lo demás sí. Con imágenes pequeñas, las tolerancias de distancia suben a medio píxel (p95) y 1,5 píxeles (máximo) del original, porque no se puede exigir más precisión que la de la fuente. El informe marca en rojo lo que falta y en verde lo que sobra, con las zonas numeradas de peor a mejor.
+Contour and region errors are measured against the image **with the same corner rounding applied**: the finish does not count as an error, everything else does. For small images the distance tolerances rise to half a pixel (p95) and 1.5 pixels (maximum) of the source, since no model can be more precise than its source. The report marks missing areas in red and extra areas in green, numbered from worst to best.
 
-## Estructura
+## Project structure
 
 ```
 tools/
-  redibujar.py   imagen → geometría exacta → .glb (modo principal)
-  letras.py      texto + fuente .ttf/.otf/.ttc → .glb
-  verificar.py   juez: .glb contra la imagen, PASA/FALLA por criterio
-  simbolo.py     común: máscara, canto redondeado, normales, exportación
-glb/             modelos detallados y ligeros · glb/web/ versiones meshopt
-svg/             planta 2D de cada modelo y máscara de comprobación
-fuentes/         imágenes de origen
-video/           escena, exportador, música y vídeo de ejemplo
-visor.html       visor three.js
-docs/            imágenes del README
+  redibujar.py   image → exact geometry → .glb (main mode)
+  letras.py      text + .ttf/.otf/.ttc font → .glb
+  verificar.py   judge: .glb vs. image, PASS/FAIL per criterion
+  simbolo.py     shared: mask, rounded bevel, normals, export
+glb/             detailed and light models · glb/web/ meshopt versions
+svg/             2D outline of each model and its check mask
+fuentes/         source images
+video/           scene, exporter, music and sample video
+visor.html       three.js viewer
+docs/            README images
 ```
 
-## Licencia
+File, folder and flag names are in Spanish (`fuentes` = sources, `ligera` = light, `simetria` = symmetry).
 
-Código y modelos bajo licencia [MIT](LICENSE).
+## License
 
-Los caracteres 壽, 福 y 囍 son símbolos tradicionales de dominio público. Las imágenes de origen de `shou-sello` y `xi-doble` procedían de bancos de imágenes con marca de agua y no se incluyen en el repositorio. Para uso comercial de esos dos modelos, conviene regenerarlos desde imágenes propias o con licencia.
+Code and models are released under the [MIT](LICENSE) license.
+
+The characters 壽, 福 and 囍 are traditional public-domain symbols. The source images for `shou-sello` and `xi-doble` came from watermarked stock sites and are not included in the repository. For commercial use of those two models, regenerate them from your own or properly licensed images.
