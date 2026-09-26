@@ -62,8 +62,11 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #sobre .nodo.sel{fill:var(--acento)}
 #lienzo .guia{fill:none;stroke:rgba(255,255,255,.08);stroke-dasharray:3 4;pointer-events:none}
 #sobre .dibujo{fill:rgba(13,153,255,.12);stroke:var(--acento);pointer-events:none}
-#lienzo.herr-rect,#lienzo.herr-elipse{cursor:crosshair}
-#lienzo.herr-rect .capa,#lienzo.herr-elipse .capa{cursor:crosshair}
+#sobre .corte{fill:none;stroke:#ff5a5a;stroke-width:1.5;stroke-dasharray:6 4;pointer-events:none}
+#sobre .corte-punto{fill:#ff5a5a;pointer-events:none}
+#lienzo .costura,#flotante .costura{fill:none;stroke:#ff5a5a;stroke-width:1.5;stroke-dasharray:5 4;pointer-events:none}
+#lienzo.herr-rect,#lienzo.herr-elipse,#lienzo.herr-cuchilla{cursor:crosshair}
+#lienzo.herr-rect .capa,#lienzo.herr-elipse .capa,#lienzo.herr-cuchilla .capa{cursor:crosshair}
 #lienzo.pan,#lienzo.pan .capa{cursor:grab}
 #tres canvas{display:block}
 .etiqueta{position:absolute;left:10px;bottom:8px;color:var(--tenue);font-size:11px;pointer-events:none}
@@ -82,6 +85,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <button data-herr="mover" title="Mover (V)">↖ Mover</button>
     <button data-herr="rect" title="Rectángulo (R)">▭ Rect</button>
     <button data-herr="elipse" title="Elipse (O)">◯ Elipse</button>
+    <button data-herr="cuchilla" title="Cortar (K): arrastra de lado a lado de un trazo, o clic por punto y doble clic o Enter para terminar; Esc cancela">✂ Cortar</button>
     <button id="bNodos" title="Editar nodos (Enter o doble clic)">⬩ Nodos</button>
     <span class="sep"></span>
     <button id="bDeshacer" title="Deshacer (⌘Z)">↶</button>
@@ -196,11 +200,14 @@ let dExacto = '', dContorno = null;
 
 function dibujar() {
   let capas = '';
-  for (const c of doc.capas) if (c.visible)
+  let costuras = '';
+  for (const c of doc.capas) if (c.visible) {
     capas += `<path class="capa ${c.op}" data-id="${c.id}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>`;
+    if (c.costuras?.length) costuras += `<path class="costura" data-costura="${c.id}" transform="${marcoCapa(c.t)}" d="${c.costuras.map((l) => 'M' + l.map((q) => q.join(' ')).join('L')).join('')}"/>`;
+  }
   lienzo.innerHTML = `<g id="mundo" transform="${marcoMundo()}">
       <circle class="guia" r="0.5"/><line class="guia" x1="-1000" x2="1000"/><line class="guia" y1="-1000" y2="1000"/>
-      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/>${capas}</g>`;
+      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/>${capas}${costuras}</g>`;
   lienzo.setAttribute('class', `herr-${herramienta}${espacio ? ' pan' : ''}${exacta ? '' : ' provisional'}`);
   sobre();
 }
@@ -243,9 +250,11 @@ function terminarGesto() {
 const flotante = $('#flotante');
 let flota = null;
 function empezarFlotante(c) {
-  lienzo.querySelector(`path.capa[data-id="${c.id}"]`)?.style.setProperty('visibility', 'hidden');
+  const costura = lienzo.querySelector(`path[data-costura="${c.id}"]`);
+  for (const el of [lienzo.querySelector(`path.capa[data-id="${c.id}"]`), costura]) el?.style.setProperty('visibility', 'hidden');
   flotante.innerHTML = `<g transform="${marcoMundo()}"><path class="capa ${c.op}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>
-    <path class="contorno" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/></g>`;
+    <path class="contorno" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>
+    ${costura ? `<path class="costura" transform="${marcoCapa(c.t)}" d="${costura.getAttribute('d')}"/>` : ''}</g>`;
   flota = { inicio: inv(mul(matMundo(), matCapa(c.t))) };
 }
 function moverFlotante(c) { flotante.style.transform = `matrix(${mul(mul(matMundo(), matCapa(c.t)), flota.inicio).join(',')})`; }
@@ -274,6 +283,11 @@ function sobre() {
         <circle class="asa rot" data-asa="rot" cx="${rx}" cy="${ry}" r="5"/>`;
       q.forEach(([x, y], k) => { html += `<rect class="asa" data-asa="${k}" x="${x - 4}" y="${y - 4}" width="8" height="8"/>`; });
     }
+  }
+  if (herramienta === 'cuchilla' && cuchilla?.puntos.length) {
+    const pts = [...cuchilla.puntos, cuchilla.cursor].map(aPantalla);
+    html += `<polyline class="corte" points="${pts.map((q) => q.join(',')).join(' ')}"/>` +
+      cuchilla.puntos.map((q) => { const [x, y] = aPantalla(q); return `<circle class="corte-punto" cx="${x}" cy="${y}" r="3"/>`; }).join('');
   }
   if (arrastre?.tipo === 'dibujo') {
     const [x0, y0] = aPantalla(arrastre.a), [x1, y1] = aPantalla(arrastre.b);
@@ -337,6 +351,8 @@ function panel() {
       <label>Alto<input type="number" step="0.005" min="0.001" data-p="h" value="${num((b[3] - b[1]) * Math.abs(c.t.sy))}"></label>
       <label>Rotación °<input type="number" step="1" data-p="r" value="${num(c.t.r * 180 / Math.PI, 1)}"></label>
       <label>Nodos<input disabled value="${c.anillos.reduce((n, r) => n + r.length, 0)}"></label></div>`;
+    if (c.costuras?.length) html += `<div class="fila"><span class="nota" style="padding:0;align-self:center">Costuras: ${c.costuras.length}</span>
+      <button id="bCosturas" title="Quitar los cortes pendientes de esta capa">Quitar</button></div>`;
     if (nodos) html += `<div class="fila"><button id="bSimplificar" title="Quita nodos que no cambian la forma más de 0,15 % del diámetro">Simplificar nodos</button></div>
       <p class="nota">Arrastra un nodo para moverlo · doble clic en el borde añade uno · Supr lo borra · flechas lo empujan.</p>`;
   } else {
@@ -373,7 +389,10 @@ $('#props').addEventListener('change', (e) => {
   el.blur();
   commit();
 });
-$('#props').addEventListener('click', (e) => { if (e.target.id === 'bSimplificar') simplificar(); });
+$('#props').addEventListener('click', (e) => {
+  if (e.target.id === 'bSimplificar') simplificar();
+  if (e.target.id === 'bCosturas') { delete capaSel().costuras; commit(); }
+});
 
 $('#capas').addEventListener('click', (e) => {
   const li = e.target.closest('li'); if (!li) return;
@@ -400,6 +419,7 @@ function commit() {
     if (historia.length > 200) { historia.shift(); puntero--; }
     cambioGeo();
     if (!enServidor && s !== guardado) guardar(true);  // la primera edición ya queda a salvo
+    else programarGuardado();
   }
   todo();
 }
@@ -407,7 +427,7 @@ function irA(i) {
   if (i < 0 || i >= historia.length) return;
   puntero = i; doc = JSON.parse(historia[i]);
   if (!capaSel()) { sel = null; nodos = false; }
-  nodoSel = null; cambioGeo(); todo();
+  nodoSel = null; cambioGeo(); programarGuardado(); todo();
 }
 function todo() {
   dibujar(); capasUI(); panel();
@@ -423,6 +443,13 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   const m = deEvento(e), el = e.target, c = capaSel();
   if (e.button === 1 || espacio) { empezarGesto(); arrastre = { tipo: 'pan', x: e.clientX, y: e.clientY, cx: vista.cx, cy: vista.cy }; return; }
   if (e.button !== 0) return;
+  if (herramienta === 'cuchilla') {
+    cuchilla ??= { puntos: [], cursor: m };
+    cuchilla.puntos.push(m); cuchilla.cursor = m;
+    cuchilla.pulsado = { x: e.clientX, y: e.clientY };  // si se arrastra, es a mano alzada
+    sobre();
+    return;
+  }
   if (herramienta !== 'mover') { arrastre = { tipo: 'dibujo', a: m, b: m }; return; }
   const id = Number(el.dataset.id) || null;
   const doble = id && id === ultimoClic.id && e.timeStamp - ultimoClic.t < 350;
@@ -448,6 +475,15 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   todo();
 });
 addEventListener('pointermove', (e) => {
+  if (cuchilla && !arrastre) {
+    const m = deEvento(e), P = cuchilla.pulsado;
+    if (P && !cuchilla.aMano && Math.hypot(e.clientX - P.x, e.clientY - P.y) > 4) cuchilla.aMano = true;
+    if (cuchilla.aMano) {  // un punto cada 3 px de pantalla
+      const u = cuchilla.puntos.at(-1);
+      if (Math.hypot(m[0] - u[0], m[1] - u[1]) * vista.zoom >= 3) cuchilla.puntos.push(m);
+    }
+    cuchilla.cursor = m; sobre(); return;
+  }
   if (!arrastre) return;
   const m = deEvento(e), c = capaSel(), A = arrastre;
   if (A.tipo === 'pan') {
@@ -491,6 +527,11 @@ function pedirPanel() {
   requestAnimationFrame(() => { panelPendiente = false; panel(); });
 }
 addEventListener('pointerup', (e) => {
+  if (cuchilla?.pulsado) {
+    cuchilla.pulsado = null;
+    if (cuchilla.aMano) { cuchilla.puntos.push(deEvento(e)); terminarCorte(); }  // a mano alzada: corta al soltar
+    return;
+  }
   const A = arrastre; arrastre = null;
   if (!A) return;
   if (A.tipo === 'pan') { terminarGesto(); return; }
@@ -576,7 +617,10 @@ addEventListener('keydown', (e) => {
   if (k === 'v') herr('mover');
   else if (k === 'r') herr('rect');
   else if (k === 'o') herr('elipse');
+  else if (k === 'k') herr('cuchilla');
+  else if (e.key === 'Enter' && cuchilla) terminarCorte();
   else if (e.key === 'Enter' && c) { nodos = !nodos; nodoSel = null; todo(); }
+  else if (e.key === 'Escape' && cuchilla) { cuchilla = null; herramienta = 'mover'; todo(); }
   else if (e.key === 'Escape') { if (nodos) nodos = false; else sel = null; nodoSel = null; herramienta = 'mover'; todo(); }
   else if ((e.key === 'Delete' || e.key === 'Backspace') && c) { e.preventDefault(); nodos && nodoSel ? borrarNodo() : borrarCapa(); }
   else if (e.key.startsWith('Arrow') && c) {
@@ -592,7 +636,60 @@ addEventListener('keydown', (e) => {
 });
 addEventListener('keyup', (e) => { if (e.code === 'Space') { espacio = false; lienzo.classList.remove('pan'); } });
 
-function herr(h) { herramienta = h; if (h !== 'mover') nodos = false; todo(); }
+function herr(h) {
+  herramienta = h; cuchilla = null; if (h !== 'mover') nodos = false; todo();
+  if (h === 'cuchilla') estado('Cuchilla: arrastra de lado a lado de un trazo, o clic por punto y doble clic para terminar · Esc cancela');
+}
+
+// ---------- cuchilla
+// El corte lo hace el servidor (shapely: split con borde común exacto, sin rendija). Cada
+// pieza pasa a ser una capa con la operación de la original y su origen en el centro
+// de su caja; la transformación de la original queda horneada en los nodos.
+let cuchilla = null;  // { puntos: [[x, y]...], cursor } en el mundo
+$('#dos').addEventListener('dblclick', () => {
+  if (!cuchilla) return;
+  cuchilla.puntos.pop();  // el doble clic añadió dos veces el mismo punto
+  terminarCorte();
+});
+async function terminarCorte() {
+  const linea = cuchilla.puntos;
+  cuchilla = null; herramienta = 'mover';
+  if (linea.length < 2) { todo(); return; }
+  // como la cuchilla de Illustrator: corta todo lo visible que cruza, haya selección o no
+  // (limitarla a la selección hacía que el segundo corte, tras seleccionar una pieza, no hiciera nada)
+  const objetivo = doc.capas.filter((c) => c.visible);
+  const r = await api('/api/cortar', { linea, capas: objetivo.map((c) => ({ id: c.id, anillos: anillosMundo(c),
+    costuras: (c.costuras ?? []).map((l) => l.map((q) => aMundo(c.t, q))) })) });
+  if (r.error) { todo(); return estado(`El corte falló: ${r.error}`, true); }
+  // atravesada sin separar: sigue unida por otro lado; la línea queda como costura (en
+  // coordenadas de la capa, para que se mueva con ella) y cuenta en los cortes siguientes
+  for (const id of r.atraviesa) {
+    const c = doc.capas.find((x) => x.id === id);
+    c.costuras = [...(c.costuras ?? []), linea.map((q) => aLocal(c.t, q))];
+  }
+  if (!r.cortes.length) {
+    commit();
+    return estado(r.atraviesa.length
+      ? 'Costura marcada: el trazo sigue unido por otro lado. Corta también sus otras uniones y se separará'
+      : 'La línea no pasa por ninguna forma');
+  }
+  let piezas = 0, primera = null;
+  for (const { id, piezas: polis } of r.cortes) {
+    const i = doc.capas.findIndex((c) => c.id === id), c = doc.capas[i];
+    const nuevas = polis.map((poli, k) => {
+      const ext = poli[0], xs = ext.map((q) => q[0]), ys = ext.map((q) => q[1]);
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      const anillos = poli.map((a) => a.slice(0, -1).map(([x, y]) => [x - cx, y - cy]));  // sin el punto de cierre
+      const sufijo = k < 26 ? String.fromCharCode(97 + k) : String(k + 1);
+      return { id: idSig++, nombre: `${c.nombre} · ${sufijo}`, op: c.op, visible: true, anillos, t: { x: cx, y: cy, r: 0, sx: 1, sy: 1 } };
+    });
+    doc.capas.splice(i, 1, ...nuevas);
+    piezas += nuevas.length; primera ??= nuevas[0].id;
+  }
+  sel = primera; nodos = false; nodoSel = null;
+  commit();
+  estado(`Corte: ${r.cortes.length} capa(s) → ${piezas} piezas` + (r.atraviesa.length ? ' · y una costura en otra capa' : ''));
+}
 function duplicar() {
   const c = capaSel(); if (!c) return;
   const copia = JSON.parse(JSON.stringify(c));
@@ -737,7 +834,10 @@ new ResizeObserver(() => { tamano3d(); if (doc) vistaCambiada(); }).observe(caja
 })();
 
 // ---------- archivos
-function estado(txt, error = false) { const s = $('#estado'); s.innerHTML = txt; s.classList.toggle('error', error); }
+function estado(txt, error = false, auto = false) {
+  const s = $('#estado'); s.innerHTML = txt; s.classList.toggle('error', error);
+  s.dataset.auto = auto ? '1' : '';  // los avisos del guardado automático ceden su sitio
+}
 async function api(ruta, cuerpo) {
   const r = await fetch(ruta, cuerpo ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo) } : {});
   return r.json();
@@ -749,7 +849,7 @@ function nombreValido(callado = false) {
   return false;
 }
 function yaGuardado() {
-  guardado = JSON.stringify(doc); enServidor = true; titulo();
+  guardado = JSON.stringify(doc); enServidor = true; nombreGuardado = nombre; titulo();
   history.replaceState(null, '', `?s=${nombre}`);  // al recargar se abre este documento
 }
 async function guardar(auto = false) {
@@ -757,15 +857,28 @@ async function guardar(auto = false) {
   const texto = JSON.stringify(doc);
   const r = await api('/api/guardar', { nombre, doc });
   if (r.error) return estado(auto ? `No se guardó solo: ${r.error}` : r.error, true);
-  if (JSON.stringify(doc) === texto) yaGuardado(); else { enServidor = true; titulo(); }
-  if (auto && generando) return;  // no tapar «Generando GLB…» ni su resultado
-  estado(auto ? `Guardado automático ${new Date().toLocaleTimeString('es')}` : `Guardado en editor/${nombre}.json`);
+  if (JSON.stringify(doc) === texto) yaGuardado(); else { enServidor = true; nombreGuardado = nombre; titulo(); }
+  // el automático no tapa otro mensaje (el resultado de un corte, «Generando GLB…»…)
+  if (auto && ($('#estado').textContent && !$('#estado').dataset.auto || generando)) return;
+  estado(auto ? `Guardado automático ${new Date().toLocaleTimeString('es')}` : `Guardado en editor/${nombre}.json`, false, auto);
 }
 $('#bGuardar').addEventListener('click', () => guardar());
-setInterval(() => { if (doc && enServidor && JSON.stringify(doc) !== guardado) guardar(true); }, 30000);
-addEventListener('pagehide', () => {  // lo de los últimos segundos, al cerrar la pestaña
-  if (doc && JSON.stringify(doc) !== guardado && nombreValido(true))
-    navigator.sendBeacon('/api/guardar', JSON.stringify({ nombre, doc }));
+// guardado automático 1,5 s después del último cambio
+let tGuardar = null, nombreGuardado = null;
+function programarGuardado() {
+  if (!enServidor) return;
+  clearTimeout(tGuardar);
+  tGuardar = setTimeout(() => { if (doc && JSON.stringify(doc) !== guardado) guardar(true); }, 1500);
+}
+// al cerrar la pestaña, lo de ese último segundo y medio. sendBeacon admite 64 KB y un
+// símbolo grande pasa de 100 (shou-circular: 105): las capas cuyos nodos no cambiaron
+// desde el último guardado viajan sin ellos (anillos "=") y el servidor los completa
+addEventListener('pagehide', () => {
+  if (!doc || JSON.stringify(doc) === guardado || !nombreValido(true)) return;
+  const parche = enServidor && nombre === nombreGuardado;
+  const base = new Map(parche ? JSON.parse(guardado).capas.map((c) => [c.id, JSON.stringify(c.anillos)]) : []);
+  const enviado = { ...doc, capas: doc.capas.map((c) => (base.get(c.id) === JSON.stringify(c.anillos) ? { ...c, anillos: '=' } : c)) };
+  navigator.sendBeacon('/api/guardar', JSON.stringify({ nombre, doc: enviado, parche }));
 });
 let generando = false;
 $('#bGenerar').addEventListener('click', async () => {
@@ -794,6 +907,7 @@ async function abrir(s) {
   if (r.error) return estado(r.error, true);
   doc = migrar(r.doc); nombre = r.nombre; $('#nombre').value = nombre;
   enServidor = r.nombre === s;  // abierto de editor/<nombre>.json
+  nombreGuardado = enServidor ? r.nombre : null;
   idSig = Math.max(0, ...doc.capas.map((c) => c.id || 0)) + 1;
   for (const c of doc.capas) c.id ??= idSig++;
   sel = null; nodos = false; nodoSel = null; herramienta = 'mover';
@@ -803,12 +917,12 @@ async function abrir(s) {
   $('#abrir').value = '';
   commit(); encuadrar();
   estado(s === '+nuevo' ? 'Documento en blanco' : `Abierto ${s} · ${doc.capas.length} capa(s)` +
-    (r.nombre !== s ? ` · se guardará como ${r.nombre}` : ''));
+    (r.nombre !== s ? ` · se guardará como ${r.nombre}` : ''), false, true);
 }
 $('#abrir').addEventListener('change', (e) => e.target.value && abrir(e.target.value));
 
 // para las pruebas de tests/: estado de solo lectura
-window.editor = { dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado };
+window.editor = { aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado };
 
 const lista = await api('/api/simbolos');
 ajustesBase = lista.ajustes;

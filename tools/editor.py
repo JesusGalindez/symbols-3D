@@ -11,23 +11,31 @@ sobrescribe nunca.
 """
 import argparse
 import json
+import math
 import re
 import sys
+import time
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import shapely
-from shapely.geometry import Polygon
-from shapely.ops import unary_union
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.ops import polygonize, unary_union
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import simbolo as s  # noqa: E402
 
 NOMBRE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 AJUSTES = {"fondo": s.FONDO, "bisel": s.BISEL, "color": s.COLOR}
+# Rejilla a la que se ajusta cada capa antes de combinar. Las piezas de un corte comparten
+# borde, pero el navegador las guarda en coordenadas locales y al volver al mundo sus
+# vértices difieren ~1e-17: la unión dejaba una grieta de ancho cero y el redondeo en
+# planta se comía la franja junto a ella (shou-cruz cortado: 5e-3 de área perdida).
+PRECISION = 1e-9
 COPIAS = 20          # copias por documento en editor/.historial
+CADA_COPIA = 30      # segundos mínimos entre copias: el navegador guarda 1,5 s tras cada cambio
 SALIDA = s.RAIZ      # --salida la cambia: glb/, svg/ y editor/ se escriben ahí
 
 
@@ -67,22 +75,79 @@ def anillo_valido(a):
     return unary_union([x for x in getattr(g, "geoms", [g]) if x.geom_type in ("Polygon", "MultiPolygon")])
 
 
+def forma_capa(anillos):
+    """Los anillos de una capa, en el mundo, combinados como el relleno evenodd del lienzo."""
+    forma = Polygon()
+    for a in anillos:
+        if len(a) >= 3:
+            forma = forma.symmetric_difference(anillo_valido(a))
+    return forma
+
+
 def geometria(capas, bisel):
     """Capas en coordenadas del mundo, de abajo arriba: unir suma, restar quita lo de debajo."""
     geo = Polygon()
     for c in capas:
-        forma = Polygon()
-        for a in c["anillos"]:
-            if len(a) >= 3:
-                forma = forma.symmetric_difference(anillo_valido(a))
+        forma = shapely.set_precision(forma_capa(c["anillos"]), PRECISION)
         geo = geo.union(forma) if c["op"] == "unir" else geo.difference(forma)
     geo = unary_union([p for p in s.lista(geo.buffer(0)) if p.area > 1e-7])
     # mismo acabado en planta que redibujar.py; sobre una forma ya redondeada no cambia nada
     return s.redondear_planta(geo, bisel * s.DIAMETRO * 1.3, bisel * s.DIAMETRO * 0.6)
 
 
+def cortar(capas, linea):
+    """Cuchilla. Cada capa se parte por la línea nueva más sus costuras (cortes anteriores
+    que no la separaron: en símbolos como shou-cruz un trazo está unido por varios lados y
+    un corte solo no lo suelta). Las caras salen de polygonize() sobre el contorno y las
+    líneas: vecinas con el mismo borde, vértice a vértice, y sin rendija al volver a unirlas.
+    Devuelve las capas separadas con sus piezas, y las que la línea atraviesa sin separar
+    (el navegador guarda esa línea como costura)."""
+    cortes, atraviesa = [], []
+    for c in capas:
+        forma = forma_capa(c["anillos"])
+        if forma.is_empty:
+            continue
+        nueva = alargar(linea, forma)
+        if nueva.intersection(forma).length < 1e-4:
+            continue  # la línea nueva no pasa por esta capa
+        lineas = [nueva, *(alargar(k, forma) for k in c.get("costuras", []))]
+        caras = [f for f in polygonize(unary_union([forma.boundary, *lineas]))
+                 if f.area > 1e-7 and forma.contains(f.representative_point())]
+        if len(caras) > len(s.lista(forma)):
+            cortes.append({"id": c["id"], "piezas": a_listas(MultiPolygon(caras))})
+        else:
+            atraviesa.append(c["id"])
+    return {"cortes": cortes, "atraviesa": atraviesa}
+
+
+def alargar(linea, forma, hasta=0.15):
+    """Un extremo de la cuchilla que acaba dentro de un trazo (fácil al arrastrar a mano)
+    no cortaría nada: se prolonga en su dirección hasta salir de ese trazo, y no más allá
+    de `hasta`, para no llegar a cortar trazos que no se tocaron."""
+    pts = [tuple(q) for q in linea]
+    for extremo, resto in ((0, pts[1:]), (-1, pts[-2::-1])):
+        x, y = pts[extremo]
+        if not forma.contains(Point(x, y)):
+            continue
+        # dirección con un punto a ≥ 0,01: a mano alzada los primeros puntos van muy juntos
+        lejos = next((q for q in resto if math.dist(q, (x, y)) >= 0.01), resto[-1] if resto else None)
+        if lejos is None or math.dist(lejos, (x, y)) == 0:
+            continue
+        ux, uy = (x - lejos[0]) / math.dist(lejos, (x, y)), (y - lejos[1]) / math.dist(lejos, (x, y))
+        salida = LineString([(x, y), (x + ux * hasta, y + uy * hasta)]).intersection(forma.boundary)
+        if salida.is_empty:
+            continue
+        q = min(getattr(salida, "geoms", [salida]), key=lambda g: g.distance(Point(x, y))).coords[0]
+        nuevo = (q[0] + ux * 1e-4, q[1] + uy * 1e-4)  # justo fuera: la línea tiene que cruzar el borde
+        if extremo == 0:
+            pts.insert(0, nuevo)
+        else:
+            pts.append(nuevo)
+    return LineString(pts)
+
+
 def a_listas(geo):
-    """Multipolígono de shapely -> [[exterior, hueco...], ...] como en polygon-clipping."""
+    """Multipolígono de shapely -> [[exterior, hueco...], ...] (anillos cerrados, como GeoJSON)."""
     r = lambda a: [[round(x, 6), round(y, 6)] for x, y in a.coords]
     return [[r(p.exterior), *map(r, p.interiors)] for p in s.lista(geo) if not p.is_empty]
 
@@ -111,9 +176,25 @@ def guardar(nombre, doc):
     historial = docs() / ".historial" / nombre
     historial.mkdir(parents=True, exist_ok=True)
     ruta.write_text(texto)
-    (historial / f"{datetime.now():%Y%m%d-%H%M%S-%f}.json").write_text(texto)
-    for vieja in sorted(historial.glob("*.json"))[:-COPIAS]:
-        vieja.unlink()
+    copias = sorted(historial.glob("*.json"))
+    if not copias or time.time() - copias[-1].stat().st_mtime >= CADA_COPIA:
+        (historial / f"{datetime.now():%Y%m%d-%H%M%S-%f}.json").write_text(texto)
+        for vieja in sorted(historial.glob("*.json"))[:-COPIAS]:
+            vieja.unlink()
+
+
+def completar_parche(nombre, doc):
+    """Al cerrar la pestaña, sendBeacon solo admite 64 KB y shou-circular ocupa 105: el
+    navegador manda con anillos "=" las capas cuyos nodos no cambiaron desde el último
+    guardado, y aquí se toman del documento guardado."""
+    ruta = docs() / f"{nombre}.json"
+    guardadas = {c["id"]: c["anillos"] for c in json.loads(ruta.read_text())["capas"]} if ruta.exists() else {}
+    for c in doc["capas"]:
+        if c["anillos"] == "=":
+            if c["id"] not in guardadas:
+                raise ValueError(f"parche sin base: la capa {c['id']} no está en editor/{nombre}.json")
+            c["anillos"] = guardadas[c["id"]]
+    return doc
 
 
 class Manejador(SimpleHTTPRequestHandler):
@@ -165,12 +246,17 @@ class Manejador(SimpleHTTPRequestHandler):
             except Exception as e:  # geometría imposible a mitad de edición: se dice, no se cae
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
             return self.responder({"resultado": a_listas(geo)})
+        if self.path == "/api/cortar":
+            try:
+                return self.responder(cortar(datos["capas"], datos["linea"]))
+            except Exception as e:
+                return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
         nombre = datos.get("nombre", "")
         if not NOMBRE.match(nombre):
             return self.responder({"error": "nombre: minúsculas, números y guiones"}, 400)
         try:
             if self.path == "/api/guardar":
-                guardar(nombre, datos["doc"])
+                guardar(nombre, completar_parche(nombre, datos["doc"]) if datos.get("parche") else datos["doc"])
                 return self.responder({"ok": True})
             if self.path == "/api/generar":
                 return self.responder({"ok": True, **generar(nombre, datos["doc"], datos["capas"])})

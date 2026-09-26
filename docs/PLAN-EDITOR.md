@@ -181,6 +181,52 @@ original limitada a la caja de esa capa).
 **Tarea de usuario (5 min):** hacer una variante de `shou-cruz` con el brazo derecho
 más largo y generarla.
 
+**Hecho el 2026-09-26** (falta la tarea de usuario):
+- Cuchilla con `shapely.ops.split`, sin prolongar la línea: corta solo donde se dibuja de
+  lado a lado (prolongarla cortaría trazos lejanos). Clic por punto; doble clic o Enter
+  termina; Esc cancela. Cada pieza, una capa `Nombre · a`, `· b`…
+- **Fallo encontrado por el criterio:** `shou-cruz` cortado en 27 piezas y generado sin
+  mover nada salía RECHAZADO (IoU 0,9738). Las piezas vuelven del navegador con el
+  borde común desplazado ~1e-17 (coordenadas locales); la unión dejaba una grieta de
+  ancho cero y el redondeo en planta se comía 5e-3 de área junto a ella. Arreglo:
+  `set_precision(1e-9)` por capa antes de combinar. Ahora APROBADO.
+- **Fallo de F0 encontrado aquí:** el guardado al cerrar la pestaña nunca funcionó con
+  símbolos grandes: `sendBeacon` admite 64 KB y `shou-cruz` ocupa 72, `shou-circular` 105.
+  Ahora se guarda 1,5 s después de cada cambio (el historial copia como mucho cada 30 s)
+  y al cerrar se manda un parche: las capas sin cambios en nodos van sin ellos.
+- Pruebas: corte + generar → APROBADO; mover una pieza cortada solo cambia su zona (fuera,
+  franjas de ~3e-6, 300 veces más finas que un píxel del verificador); en la interfaz,
+  cortar con Enter y con doble clic sin cambiar el área; cierre con documento > 64 KB.
+
+**Corrección tras la prueba del usuario** («no funciona la función corta»). Su documento
+guardado mostraba una sola capa y la pieza movida: el corte nunca se aplicó. Tres causas:
+- **Cortar arrastrando no existía:** solo clic por punto; un arrastre dejaba un punto.
+  Ahora arrastrar corta a mano alzada al soltar; el clic por punto sigue.
+- **Un corte solo no suelta un trazo en símbolos entrelazados:** en `shou-cruz` casi todo
+  forma anillos, y el editor decía «no cruza ninguna forma», lo cual era falso. Ahora el
+  corte que atraviesa sin separar queda como **costura** (línea roja discontinua, en
+  coordenadas de la capa, se deshace con ⌘Z y se quita desde el panel) y se suma a los
+  siguientes; las caras salen de `polygonize` del contorno y todas las líneas. Prueba: el
+  anillo de `shou-cruz`, cortado arriba (costura) y abajo, se parte en dos mitades que
+  generadas siguen APROBADAS.
+- **La cuchilla solo cortaba la capa seleccionada**, y tras cada corte quedaba una
+  seleccionada: el segundo corte en otro sitio no hacía nada. Ahora corta todo lo visible
+  que cruza, como la de Illustrator.
+- Además: un extremo que acaba encima del trazo se prolonga hasta salir de él (≤ 0,15); el
+  guardado automático ya no tapa el mensaje de un corte.
+
+**Sondeo «separar automáticamente» (hecho).** En vez de la retícula de `redibujar.py`,
+se prolongan los bordes rectos del contorno final (≥ 0,03) por dentro del material hasta
+que salen (≤ 0,12): una unión en T es justo donde el borde de un trazo atraviesa otro.
+- `shou-cruz`: 40 cortes propuestos, los 40 en uniones reales (revisados uno a uno).
+- `xi-doble`: 56, todos en cruces o uniones; 3 pares casi paralelos a ~0,015 (3/37,
+  16/40, 27/31) que dejarían una astilla entre ellos.
+- Aplicarlos todos a la vez da ~100 fragmentos (cada cruce, un cuadrado suelto): para
+  mover un trazo habría que seleccionar varios (F3) y no hay «combinar capas».
+- **Decisión pendiente del usuario.** Recomendación: no «separar todo» de golpe, sino
+  mostrar los cortes propuestos como sugerencias en modo cuchilla y aplicar el que se
+  pulse; los pares casi paralelos se funden en uno.
+
 ---
 
 ## F2 · Precisión: imán, guías y simetría en vivo  (2 sesiones)

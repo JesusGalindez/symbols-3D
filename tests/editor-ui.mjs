@@ -91,6 +91,87 @@ try {
   await p.click('#bGenerar');
   await pausa(1500);
   comprobar(/no salió del editor/.test(await p.$eval('#estado', (x) => x.textContent)), 'no deja pisar shou-cruz, que está aprobado');
+  await p.$eval('#nombre', (x) => { x.value = 'prueba-ui'; });  // como haría alguien tras el aviso
+
+  // cuchilla (K): una línea vertical de lado a lado de «Pieza 1» la parte en capas;
+  // cortar no cambia la forma, así que el área de la geometría exacta sigue igual
+  const area = () => p.evaluate(() => window.editor.resultado().reduce((s, poli) => s + poli.reduce((t, a, k) => {
+    let d = 0; for (let i = 0; i < a.length - 1; i++) d += a[i][0] * a[i + 1][1] - a[i + 1][0] * a[i][1];
+    return t + (k ? -1 : 1) * Math.abs(d) / 2; }, 0), 0));
+  await p.keyboard.press('Escape'); await p.keyboard.press('Escape');
+  await p.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+  const areaAntes = await area(), capasAntes = await p.$$eval('#capas li', (l) => l.length);
+  const idPieza1 = await p.evaluate(() => window.editor.doc().capas.find((c) => c.nombre === 'Pieza 1').id);
+  await p.click(`#capas li[data-id="${idPieza1}"]`);
+  const bb = await p.$eval(`#lienzo path.capa[data-id="${idPieza1}"]`, (el) => { const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; });
+  await p.keyboard.press('k');
+  await p.mouse.click(bb[0] + bb[2] * 0.52, bb[1] - 15);
+  await p.mouse.click(bb[0] + bb[2] * 0.52, bb[1] + bb[3] + 15);
+  await p.keyboard.press('Enter');
+  await p.waitForFunction((n) => document.querySelectorAll('#capas li').length > n, { timeout: 10000 }, capasAntes);
+  const trasCorte = await p.$$eval('#capas li .nom', (l) => l.map((x) => x.textContent));
+  comprobar(trasCorte.some((n) => n.startsWith('Pieza 1 · ')) && !trasCorte.includes('Pieza 1'),
+    `la cuchilla parte «Pieza 1» en capas (${trasCorte.filter((n) => n.startsWith('Pieza 1')).join(', ')})`);
+  await p.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+  const areaDespues = await area();
+  comprobar(Math.abs(areaDespues - areaAntes) < 1e-6, `cortar no cambia la forma (área ${areaAntes.toFixed(6)} → ${areaDespues.toFixed(6)})`);
+
+  // cuchilla a mano alzada: arrastrar y soltar corta, aunque se empiece dentro del trazo
+  // (la barra horizontal del centro de xi-doble va de y = -0,122 a -0,2)
+  const nCapas = () => p.$$eval('#capas li', (l) => l.length);
+  await p.keyboard.press('Escape'); await p.keyboard.press('Escape');
+  let antesArrastre = await nCapas();
+  const [ax0, ay0] = await p.evaluate(() => window.editor.aCliente(0, -0.09));
+  const [ax1, ay1] = await p.evaluate(() => window.editor.aCliente(0, -0.24));
+  await p.keyboard.press('k');
+  await p.mouse.move(ax0, ay0); await p.mouse.down();
+  await p.mouse.move(ax0 + 3, (ay0 + ay1) / 2, { steps: 8 }); await p.mouse.move(ax1, ay1, { steps: 8 }); await p.mouse.up();
+  await p.waitForFunction((n) => document.querySelectorAll('#capas li').length > n, { timeout: 10000 }, antesArrastre);
+  comprobar(true, `arrastrar con la cuchilla corta al soltar (${antesArrastre} → ${await nCapas()} capas)`);
+  await p.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+  comprobar(Math.abs(await area() - areaAntes) < 1e-6, 'y la forma sigue igual');
+  antesArrastre = await nCapas();
+  const [bx0, by0] = await p.evaluate(() => window.editor.aCliente(0.05, -0.16));  // dentro de la barra
+  const [bx1, by1] = await p.evaluate(() => window.editor.aCliente(0.05, -0.24));
+  await p.keyboard.press('k');
+  await p.mouse.move(bx0, by0); await p.mouse.down(); await p.mouse.move(bx1, by1, { steps: 10 }); await p.mouse.up();
+  await p.waitForFunction((n) => document.querySelectorAll('#capas li').length > n, { timeout: 10000 }, antesArrastre);
+  comprobar(true, 'también si el arrastre empieza encima del trazo');
+  await p.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+
+  // la cuchilla también termina con doble clic (el segundo clic no añade un punto repetido)
+  const idPieza2 = await p.evaluate(() => window.editor.doc().capas.find((c) => c.nombre === 'Pieza 2').id);
+  await p.click(`#capas li[data-id="${idPieza2}"]`);
+  const bb2 = await p.$eval(`#lienzo path.capa[data-id="${idPieza2}"]`, (el) => { const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; });
+  await p.keyboard.press('k');
+  await p.mouse.click(bb2[0] - 15, bb2[1] + bb2[3] * 0.5);
+  await p.mouse.click(bb2[0] + bb2[2] + 15, bb2[1] + bb2[3] * 0.5, { count: 2 });
+  await p.waitForFunction(() => window.editor.doc().capas.some((c) => c.nombre.startsWith('Pieza 2 · ')), { timeout: 10000 });
+  comprobar(true, 'la cuchilla termina con doble clic y parte «Pieza 2»');
+  await p.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+  comprobar(Math.abs(await area() - areaAntes) < 1e-6, 'y la forma sigue igual');
+
+  // costuras (shou-cruz): un corte que no separa se queda marcado y se suma al siguiente
+  {
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'shou-cruz');
+    const cortarS = async (a, b) => {
+      const [x0, y0] = await s.evaluate(([x, y]) => window.editor.aCliente(x, y), a);
+      const [x1, y1] = await s.evaluate(([x, y]) => window.editor.aCliente(x, y), b);
+      await s.keyboard.press('k');
+      await s.mouse.move(x0, y0); await s.mouse.down(); await s.mouse.move(x1, y1, { steps: 10 }); await s.mouse.up();
+      await s.waitForFunction(() => !/Cuchilla/.test(document.querySelector('#estado').textContent), { timeout: 10000 });
+    };
+    await cortarS([0, 0.56], [0, 0.38]);
+    const tras1 = await s.evaluate(() => ({ n: window.editor.doc().capas.length, k: window.editor.doc().capas[0].costuras?.length }));
+    comprobar(tras1.n === 1 && tras1.k === 1 && /Costura/.test(await s.$eval('#estado', (x) => x.textContent)),
+      `un corte que no separa queda como costura y lo dice (${await s.$eval('#estado', (x) => x.textContent)})`);
+    comprobar(await s.$$eval('#lienzo .costura', (l) => l.length) === 1, 'la costura se ve en el lienzo');
+    await cortarS([0, -0.56], [0, -0.38]);
+    const nombres = await s.$$eval('#capas li .nom', (l) => l.map((x) => x.textContent));
+    comprobar(nombres.length === 2, `con el segundo corte se separa en dos (${nombres.join(', ')})`);
+    comprobar(await s.$$eval('#lienzo .costura', (l) => l.length) === 0, 'y las costuras usadas desaparecen');
+    await s.close();
+  }
 
   // zoom con pellizco (⌃ + rueda): durante el gesto el lienzo va escalado por CSS; tiene
   // que coincidir con lo que se redibuja al acabar, y el punto bajo el cursor no se mueve
@@ -110,8 +191,10 @@ try {
   const esperado = [centro[0] + (b0[0] - centro[0]) * k, centro[1] + (b0[1] - centro[1]) * k];
   comprobar(Math.hypot(b2[0] - esperado[0], b2[1] - esperado[1]) < 1, 'el punto bajo el cursor se queda quieto al hacer zoom');
 
-  // cerrar sin guardar y reabrir: lo de los últimos segundos llega por sendBeacon
-  await p.$eval('#nombre', (x) => { x.value = 'prueba-ui'; });
+  // cerrar sin guardar y reabrir: lo del último segundo y medio llega por sendBeacon, como
+  // parche (el documento, con las piezas cortadas, ya pasa de los 64 KB que admite)
+  comprobar(await p.evaluate(() => JSON.stringify(window.editor.doc()).length) > 64 * 1024, 'el documento ya pasa de 64 KB');
+  await pausa(2000);  // el guardado automático de 1,5 s deja en disco los cortes
   await p.keyboard.press('Escape');
   await p.click('#capas li:nth-child(1)');
   await p.keyboard.press('ArrowRight', { delay: 10 });
@@ -120,7 +203,7 @@ try {
   await pausa(800);
   const { p: q } = await abrirEditor(e.chrome, e.url, 'prueba-ui');
   const xDespues = await q.evaluate(() => window.editor.doc().capas.at(-1).t.x);
-  comprobar(Math.abs(xAntes - xDespues) < 1e-12, `cerrar la pestaña sin guardar y reabrir conserva el último cambio (${xDespues})`);
+  comprobar(Math.abs(xAntes - xDespues) < 1e-12, `cerrar la pestaña sin guardar y reabrir conserva el último cambio (${xAntes} → ${xDespues})`);
 } finally {
   await e.parar();
 }
