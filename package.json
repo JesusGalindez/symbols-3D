@@ -1,0 +1,14 @@
+{
+  "name": "simbolos-3d",
+  "private": true,
+  "description": "Pruebas del editor de símbolos (tests/). El proyecto en sí es Python: ver README.",
+  "type": "module",
+  "scripts": {
+    "test:ui": "node tests/editor-ui.mjs",
+    "test:rendimiento": "node tests/rendimiento.mjs",
+    "test:fluidez": "node tests/fluidez3d.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
+}

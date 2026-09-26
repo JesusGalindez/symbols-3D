@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Editor de símbolos</title>
+<style>
+:root{--fondo:#1e1e1e;--panel:#2c2c2c;--borde:#3d3d3d;--texto:#e6e6e6;--tenue:#9a9a9a;--acento:#0d99ff;--laca:#c8321e}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--fondo);color:var(--texto);font:12px/1.4 -apple-system,system-ui,sans-serif;overflow:hidden}
+#app{display:grid;grid-template-columns:250px 1fr 1fr;grid-template-rows:44px 1fr;height:100%}
+header{grid-column:1/-1;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--panel);border-bottom:1px solid var(--borde)}
+header .sep{width:1px;height:22px;background:var(--borde);margin:0 4px}
+button,select,input{font:inherit;color:var(--texto);background:#383838;border:1px solid var(--borde);border-radius:5px;padding:4px 8px}
+button{cursor:pointer}
+button:hover{background:#444}
+button.activo{background:var(--acento);border-color:var(--acento);color:#fff}
+button.primario{background:var(--laca);border-color:var(--laca);color:#fff}
+input[type=number]{width:100%}
+#estado{margin-left:auto;color:var(--tenue);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:45vw}
+#estado.error{color:#ff7b6b}
+#estado a{color:var(--acento)}
+aside{background:var(--panel);border-right:1px solid var(--borde);display:flex;flex-direction:column;min-height:0}
+aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var(--tenue);text-transform:uppercase;letter-spacing:.04em}
+#capas{list-style:none;margin:0;padding:0 6px;overflow:auto;flex:1 1 40%;min-height:80px}
+#capas li{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:4px;cursor:default}
+#capas li:hover{background:#353535}
+#capas li.sel{background:#1c4a70}
+#capas li.oculta .nom{opacity:.45}
+#capas .ojo{background:none;border:0;padding:0 2px;color:var(--tenue)}
+#capas .op{width:14px;text-align:center;color:var(--tenue)}
+#capas .nom{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#capas input{width:100%;padding:1px 4px}
+.fila{display:flex;gap:4px;padding:6px 12px;flex-wrap:wrap}
+#props{overflow:auto;border-top:1px solid var(--borde);flex:1 1 60%}
+.rejilla{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px;padding:0 12px 8px}
+.rejilla label{display:flex;flex-direction:column;gap:2px;color:var(--tenue);font-size:11px}
+.rejilla label.ancho{grid-column:1/-1}
+.nota{color:var(--tenue);padding:0 12px 8px;font-size:11px}
+#dos,#tres{position:relative;min-width:0;min-height:0}
+#dos{border-right:1px solid var(--borde)}
+#lienzo{position:absolute;inset:0;width:100%;height:100%;display:block;background:var(--fondo);touch-action:none;transform-origin:0 0}
+#dos svg path,#dos svg circle,#dos svg line{vector-effect:non-scaling-stroke}
+/* capas propias para lo que se mueve: la tarjeta gráfica las desplaza sin repintar el lienzo */
+#flotante,#sobre{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;will-change:transform}
+#flotante,#sobre{transform-origin:0 0}
+#flotante .capa{stroke:none}
+#flotante .capa.unir{fill:var(--laca)}
+#flotante .capa.restar{fill:var(--fondo)}
+#lienzo .exacto{fill:var(--laca);pointer-events:none}
+#lienzo .capa{fill:none;stroke:rgba(255,255,255,.18);stroke-width:1;pointer-events:fill;cursor:move}
+#lienzo .capa.restar{stroke:rgba(255,255,255,.55);stroke-dasharray:4 3}
+/* provisional: se pintan las capas de abajo arriba; un píxel queda rojo si la última capa
+   que lo cubre es «unir», que es justo unir y restar en orden. La exacta llega del servidor */
+#lienzo.provisional .capa.unir{fill:var(--laca)}
+#lienzo.provisional .capa.restar{fill:var(--fondo)}
+#lienzo .capa:hover{stroke:var(--acento);stroke-width:1.5}
+#dos .contorno{fill:none;stroke:var(--acento);stroke-width:1.5;pointer-events:none}
+#sobre .caja{fill:none;stroke:var(--acento);stroke-width:1;pointer-events:none}
+#sobre .asa{fill:#fff;stroke:var(--acento);stroke-width:1.2;cursor:nwse-resize;pointer-events:all}
+#sobre .asa.rot{cursor:grab}
+#sobre .nodo{fill:#fff;stroke:var(--acento);stroke-width:1;cursor:pointer;pointer-events:all}
+#sobre .nodo.sel{fill:var(--acento)}
+#lienzo .guia{fill:none;stroke:rgba(255,255,255,.08);stroke-dasharray:3 4;pointer-events:none}
+#sobre .dibujo{fill:rgba(13,153,255,.12);stroke:var(--acento);pointer-events:none}
+#lienzo.herr-rect,#lienzo.herr-elipse{cursor:crosshair}
+#lienzo.herr-rect .capa,#lienzo.herr-elipse .capa{cursor:crosshair}
+#lienzo.pan,#lienzo.pan .capa{cursor:grab}
+#tres canvas{display:block}
+.etiqueta{position:absolute;left:10px;bottom:8px;color:var(--tenue);font-size:11px;pointer-events:none}
+</style>
+<script type="importmap">
+{"imports":{"three":"./vendor/three@0.170.0/build/three.module.js",
+"three/addons/":"./vendor/three@0.170.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <select id="abrir" title="Abrir símbolo"></select>
+    <input id="nombre" title="Nombre del resultado: glb/<nombre>.glb" size="18" spellcheck="false">
+    <span class="sep"></span>
+    <button data-herr="mover" title="Mover (V)">↖ Mover</button>
+    <button data-herr="rect" title="Rectángulo (R)">▭ Rect</button>
+    <button data-herr="elipse" title="Elipse (O)">◯ Elipse</button>
+    <button id="bNodos" title="Editar nodos (Enter o doble clic)">⬩ Nodos</button>
+    <span class="sep"></span>
+    <button id="bDeshacer" title="Deshacer (⌘Z)">↶</button>
+    <button id="bRehacer" title="Rehacer (⇧⌘Z)">↷</button>
+    <span class="sep"></span>
+    <button id="bGuardar" title="Guardar editor/<nombre>.json (⌘S); también se guarda solo">Guardar</button>
+    <button id="bGenerar" class="primario" title="GLB con el acabado exacto de la galería">Generar GLB</button>
+    <span id="estado"></span>
+  </header>
+  <aside>
+    <h3>Capas</h3>
+    <ul id="capas"></ul>
+    <div class="fila">
+      <button id="bSubir" title="Subir capa">↑</button>
+      <button id="bBajar" title="Bajar capa">↓</button>
+      <button id="bDuplicar" title="Duplicar (⌘D)">Duplicar</button>
+      <button id="bBorrar" title="Borrar (Supr)">Borrar</button>
+    </div>
+    <div id="props"></div>
+  </aside>
+  <div id="dos"><svg id="lienzo"></svg><svg id="flotante"></svg><svg id="sobre"><g id="mundoSobre"><path id="contorno" class="contorno"/></g><g id="asas"></g></svg><div id="etiqueta2d" class="etiqueta"></div></div>
+  <div id="tres"><div id="etiqueta3d" class="etiqueta"></div></div>
+</div>
+<script type="module">
+// Editor de símbolos: capas 2D al estilo Figma + vista 3D. Lo sirve tools/editor.py.
+// Coordenadas del mundo = las del símbolo: diámetro 1, centro en el origen, y hacia arriba.
+// Cada capa guarda sus anillos en coordenadas locales y una transformación t
+// (x, y, r en radianes, sx, sy), como un marco de Figma; las capas se combinan de abajo
+// arriba: «unir» suma y «restar» quita lo que hay debajo.
+// La geometría combinada la calcula solo el servidor (shapely, /api/combinar): es la
+// misma que irá al GLB. Mientras llega, el lienzo pinta las capas en orden (exacto salvo
+// el redondeo de esquinas) y lo rotula como provisional.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const $ = (q) => document.querySelector(q);
+const lienzo = $('#lienzo');
+const NOMBRE = /^[a-z0-9][a-z0-9-]*$/;
+let doc = null, nombre = '', ajustesBase = null;
+let sel = null, herramienta = 'mover', nodos = false, nodoSel = null;
+let historia = [], puntero = -1, guardado = '', enServidor = false, idSig = 1;
+let resultado = [], exacta = false, peticion = 0, espera = null;  // geometría exacta del servidor
+const vista = { cx: 0, cy: 0, zoom: 500 };  // píxeles por unidad
+
+// ---------- geometría de capas
+const trig = (t) => [Math.cos(t.r), Math.sin(t.r)];
+function aMundo(t, [u, v]) {
+  const [c, s] = trig(t), a = u * t.sx, b = v * t.sy;
+  return [t.x + c * a - s * b, t.y + s * a + c * b];
+}
+function aLocal(t, [x, y]) {
+  const [c, s] = trig(t), dx = x - t.x, dy = y - t.y;
+  return [(c * dx + s * dy) / t.sx, (-s * dx + c * dy) / t.sy];
+}
+function caja(capa) {
+  const b = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const r of capa.anillos) for (const [u, v] of r) {
+    b[0] = Math.min(b[0], u); b[1] = Math.min(b[1], v); b[2] = Math.max(b[2], u); b[3] = Math.max(b[3], v);
+  }
+  return b;
+}
+const esquinas = (b) => [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]];
+const anillosMundo = (c) => c.anillos.map((r) => r.map((p) => aMundo(c.t, p)));
+const capasMundo = () => doc.capas.filter((c) => c.visible).map((c) => ({ op: c.op, anillos: anillosMundo(c) }));
+const capaSel = () => doc?.capas.find((c) => c.id === sel) || null;
+
+function distSeg(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy;
+  const k = l ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l)) : 0;
+  return [Math.hypot(p[0] - a[0] - k * dx, p[1] - a[1] - k * dy), k];
+}
+
+// ---------- pantalla
+// Las capas se dibujan en sus coordenadas locales dentro de dos transformaciones SVG
+// (mundo→pantalla y capa→mundo): mover, girar, escalar o desplazar la vista solo cambia
+// un atributo transform, nunca el trazado. El trazado de cada capa se cachea por su
+// lista de anillos: quien cambia nodos pone una lista nueva (c.anillos = [...]).
+// medidas del contenedor #dos, no del lienzo: durante un gesto el lienzo lleva un
+// transform CSS y su getBoundingClientRect() devolvería la caja escalada
+const dos = $('#dos');
+function tam() { const r = dos.getBoundingClientRect(); return [r.width, r.height]; }
+function aPantalla([x, y]) {
+  const [w, h] = tam();
+  return [w / 2 + (x - vista.cx) * vista.zoom, h / 2 - (y - vista.cy) * vista.zoom];
+}
+function deEvento(e) {
+  const r = dos.getBoundingClientRect();
+  return [(e.clientX - r.left - r.width / 2) / vista.zoom + vista.cx,
+          -(e.clientY - r.top - r.height / 2) / vista.zoom + vista.cy];
+}
+// afines 2D como [a, b, c, d, e, f], igual que matrix() de SVG y CSS
+function matMundo() {
+  const [w, h] = tam(), z = vista.zoom;
+  return [z, 0, 0, -z, w / 2 - vista.cx * z, h / 2 + vista.cy * z];
+}
+function matCapa(t) { const [c, s] = trig(t); return [c * t.sx, s * t.sx, -s * t.sy, c * t.sy, t.x, t.y]; }
+const mul = (A, B) => [A[0] * B[0] + A[2] * B[1], A[1] * B[0] + A[3] * B[1], A[0] * B[2] + A[2] * B[3],
+  A[1] * B[2] + A[3] * B[3], A[0] * B[4] + A[2] * B[5] + A[4], A[1] * B[4] + A[3] * B[5] + A[5]];
+function inv([a, b, c, d, e, f]) { const k = a * d - b * c; return [d / k, -b / k, -c / k, a / k, (c * f - d * e) / k, (b * e - a * f) / k]; }
+const marcoMundo = () => `matrix(${matMundo().join(' ')})`;
+const marcoCapa = (t) => `matrix(${matCapa(t).join(' ')})`;
+const anillosD = (anillos) => anillos.map((r) => 'M' + r.map((p) => p[0].toFixed(6) + ' ' + p[1].toFixed(6)).join('L') + 'Z').join('');
+const cacheD = new WeakMap();
+function dCapa(c) {
+  let d = cacheD.get(c.anillos);
+  if (d === undefined) { d = anillosD(c.anillos); cacheD.set(c.anillos, d); }
+  return d;
+}
+let dExacto = '', dContorno = null;
+
+function dibujar() {
+  let capas = '';
+  for (const c of doc.capas) if (c.visible)
+    capas += `<path class="capa ${c.op}" data-id="${c.id}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>`;
+  lienzo.innerHTML = `<g id="mundo" transform="${marcoMundo()}">
+      <circle class="guia" r="0.5"/><line class="guia" x1="-1000" x2="1000"/><line class="guia" y1="-1000" y2="1000"/>
+      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/>${capas}</g>`;
+  lienzo.setAttribute('class', `herr-${herramienta}${espacio ? ' pan' : ''}${exacta ? '' : ' provisional'}`);
+  sobre();
+}
+// lo que cambia en cada fotograma de un arrastre: la capa tocada, la selección y las asas
+function refrescar(c) {
+  if (c) {
+    const p = lienzo.querySelector(`path.capa[data-id="${c.id}"]`);
+    if (p) { p.setAttribute('transform', marcoCapa(c.t)); p.setAttribute('d', dCapa(c)); }
+  }
+  sobre();
+}
+function vistaCambiada() { $('#mundo')?.setAttribute('transform', marcoMundo()); sobre(); }
+
+// Zoom y desplazamiento de la vista: durante el gesto, el lienzo y las asas ya dibujados
+// se escalan y desplazan con un transform CSS (la tarjeta gráfica, sin repintar), una vez
+// por fotograma aunque el trackpad mande varios eventos; al terminar se redibujan nítidos.
+// Redibujar en cada evento daba 30 fps con shou-circular (medido, Intel HD 6000).
+let gesto = null, gestoPendiente = false, finGesto = null;
+function empezarGesto() { if (!gesto) { gesto = { inicio: inv(matMundo()) }; lienzo.style.willChange = 'transform'; } }  // antes de tocar vista
+function seguirGesto() {
+  if (gestoPendiente) return;
+  gestoPendiente = true;
+  requestAnimationFrame(() => {
+    gestoPendiente = false;
+    if (!gesto) return;
+    const css = `matrix(${mul(matMundo(), gesto.inicio).join(',')})`;
+    lienzo.style.transform = css; $('#sobre').style.transform = css;
+  });
+}
+function terminarGesto() {
+  if (!gesto) return;
+  gesto = null; lienzo.style.transform = ''; lienzo.style.willChange = ''; $('#sobre').style.transform = '';
+  vistaCambiada();
+}
+
+// Arrastre de una capa entera (mover, escalar, girar): la capa se copia una vez a
+// #flotante y en cada fotograma solo cambia el transform CSS de ese svg, que la tarjeta
+// gráfica aplica sin repintar. Repintar una pieza de miles de puntos por fotograma
+// costaba más de 16 ms (medido: 30 fps en shou-circular con Intel HD 6000).
+const flotante = $('#flotante');
+let flota = null;
+function empezarFlotante(c) {
+  lienzo.querySelector(`path.capa[data-id="${c.id}"]`)?.style.setProperty('visibility', 'hidden');
+  flotante.innerHTML = `<g transform="${marcoMundo()}"><path class="capa ${c.op}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>
+    <path class="contorno" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/></g>`;
+  flota = { inicio: inv(mul(matMundo(), matCapa(c.t))) };
+}
+function moverFlotante(c) { flotante.style.transform = `matrix(${mul(mul(matMundo(), matCapa(c.t)), flota.inicio).join(',')})`; }
+function soltarFlotante() { flotante.innerHTML = ''; flotante.style.transform = ''; flota = null; }
+
+function sobre() {
+  const c = capaSel(), cont = $('#contorno');
+  $('#mundoSobre').setAttribute('transform', marcoMundo());
+  let html = '';
+  const d = c && c.visible && !flota ? dCapa(c) : '';  // al arrastrar, el contorno va en #flotante
+  if (dContorno !== d) { cont.setAttribute('d', d); dContorno = d; }  // miles de puntos: solo si cambia
+  if (c && c.visible) {
+    cont.setAttribute('transform', marcoCapa(c.t));
+    if (nodos) {
+      c.anillos.forEach((r, k) => r.forEach((p, i) => {
+        const [x, y] = aPantalla(aMundo(c.t, p)), s = nodoSel && nodoSel.k === k && nodoSel.i === i;
+        html += `<rect class="nodo${s ? ' sel' : ''}" data-nodo="${k},${i}" x="${x - 3}" y="${y - 3}" width="6" height="6"/>`;
+      }));
+    } else {
+      const b = caja(c), q = esquinas(b).map((p) => aPantalla(aMundo(c.t, p)));
+      html += `<polygon class="caja" points="${q.map((p) => p.join(',')).join(' ')}"/>`;
+      const [ax, ay] = aPantalla(aMundo(c.t, [(b[0] + b[2]) / 2, b[3]]));
+      const [c0, s0] = trig(c.t), sg = Math.sign(c.t.sy) || 1;
+      const rx = ax - s0 * sg * 22, ry = ay - c0 * sg * 22;  // local +v en pantalla es -y
+      html += `<line class="caja" x1="${ax}" y1="${ay}" x2="${rx}" y2="${ry}"/>
+        <circle class="asa rot" data-asa="rot" cx="${rx}" cy="${ry}" r="5"/>`;
+      q.forEach(([x, y], k) => { html += `<rect class="asa" data-asa="${k}" x="${x - 4}" y="${y - 4}" width="8" height="8"/>`; });
+    }
+  }
+  if (arrastre?.tipo === 'dibujo') {
+    const [x0, y0] = aPantalla(arrastre.a), [x1, y1] = aPantalla(arrastre.b);
+    html += herramienta === 'elipse'
+      ? `<ellipse class="dibujo" cx="${(x0 + x1) / 2}" cy="${(y0 + y1) / 2}" rx="${Math.abs(x1 - x0) / 2}" ry="${Math.abs(y1 - y0) / 2}"/>`
+      : `<rect class="dibujo" x="${Math.min(x0, x1)}" y="${Math.min(y0, y1)}" width="${Math.abs(x1 - x0)}" height="${Math.abs(y1 - y0)}"/>`;
+  }
+  $('#asas').innerHTML = html;
+}
+
+// ---------- geometría exacta (servidor)
+function cambioGeo() {
+  peticion++;  // invalida la respuesta que esté en camino
+  if (exacta) { exacta = false; lienzo.classList.add('provisional'); $('.exacto').setAttribute('d', ''); }
+  $('#etiqueta2d').textContent = 'Vista provisional · calculando la exacta…';
+  provisional3D();
+  clearTimeout(espera);
+  espera = setTimeout(pedirExacta, 400);
+}
+async function pedirExacta() {
+  if (arrastre) { espera = setTimeout(pedirExacta, 400); return; }
+  const id = peticion;
+  let r;
+  try { r = await api('/api/combinar', { capas: capasMundo(), bisel: doc.ajustes.bisel }); }
+  catch { r = { error: 'sin respuesta del servidor' }; }
+  if (id !== peticion) return;
+  if (r.error) { $('#etiqueta2d').textContent = `Vista provisional · la exacta falló: ${r.error}`; return; }
+  resultado = r.resultado; exacta = true; dExacto = anillosD(resultado.flat());
+  lienzo.classList.remove('provisional'); $('.exacto').setAttribute('d', dExacto);
+  $('#etiqueta2d').textContent = 'Geometría exacta (la del GLB)';
+  construir3D();
+  // los sólidos provisionales, preparados en tiempo libre: si se extruyeran al empezar
+  // el arrastre, el primer fotograma tardaría 50–70 ms (medido en shou-circular)
+  requestIdleCallback(() => { for (const c of doc.capas) if (c.visible && c.op === 'unir') solidoCapa(c); });
+}
+
+// ---------- paneles
+const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+function capasUI() {
+  $('#capas').innerHTML = [...doc.capas].reverse().map((c) => `
+    <li data-id="${c.id}" class="${c.id === sel ? 'sel' : ''} ${c.visible ? '' : 'oculta'}">
+      <button class="ojo" data-accion="ojo" title="Mostrar u ocultar">${c.visible ? '◉' : '○'}</button>
+      <span class="op" title="${c.op === 'unir' ? 'Une' : 'Resta'}">${c.op === 'unir' ? '＋' : '−'}</span>
+      <span class="nom">${esc(c.nombre)}</span></li>`).join('');
+}
+const num = (v, d = 3) => Number(v.toFixed(d));
+function panel() {
+  if ($('#props').contains(document.activeElement)) return;  // no pisar lo que se escribe
+  const c = capaSel(), a = doc.ajustes;
+  let html = '';
+  if (c) {
+    const b = caja(c);
+    html += `<h3>Capa</h3><div class="rejilla">
+      <label class="ancho">Nombre<input data-p="nombre" value="${esc(c.nombre)}"></label>
+      <label class="ancho">Operación<select data-p="op">
+        <option value="unir" ${c.op === 'unir' ? 'selected' : ''}>Unir</option>
+        <option value="restar" ${c.op === 'restar' ? 'selected' : ''}>Restar lo de debajo</option></select></label>
+      <label>X<input type="number" step="0.005" data-p="x" value="${num(c.t.x)}"></label>
+      <label>Y<input type="number" step="0.005" data-p="y" value="${num(c.t.y)}"></label>
+      <label>Ancho<input type="number" step="0.005" min="0.001" data-p="w" value="${num((b[2] - b[0]) * Math.abs(c.t.sx))}"></label>
+      <label>Alto<input type="number" step="0.005" min="0.001" data-p="h" value="${num((b[3] - b[1]) * Math.abs(c.t.sy))}"></label>
+      <label>Rotación °<input type="number" step="1" data-p="r" value="${num(c.t.r * 180 / Math.PI, 1)}"></label>
+      <label>Nodos<input disabled value="${c.anillos.reduce((n, r) => n + r.length, 0)}"></label></div>`;
+    if (nodos) html += `<div class="fila"><button id="bSimplificar" title="Quita nodos que no cambian la forma más de 0,15 % del diámetro">Simplificar nodos</button></div>
+      <p class="nota">Arrastra un nodo para moverlo · doble clic en el borde añade uno · Supr lo borra · flechas lo empujan.</p>`;
+  } else {
+    html += `<p class="nota" style="padding-top:10px">Clic en una forma para seleccionarla; doble clic para editar sus nodos.
+      R y O dibujan rectángulos y elipses (⇧ = proporción). Rueda desplaza, ⌘/pellizco hace zoom, espacio + arrastrar mueve el lienzo.</p>`;
+  }
+  const hex = '#' + new THREE.Color().setRGB(a.color[0], a.color[1], a.color[2], THREE.LinearSRGBColorSpace).getHexString();
+  html += `<h3>Acabado (todo el símbolo)</h3><div class="rejilla">
+    <label>Grosor<input type="number" step="0.005" min="0.01" data-g="fondo" value="${num(a.fondo)}"></label>
+    <label>Canto<input type="number" step="0.001" min="0.001" data-g="bisel" value="${num(a.bisel)}"></label>
+    <label class="ancho">Color<input type="color" data-g="color" value="${hex}"></label></div>
+    <p class="nota">Unidades: diámetro del símbolo = 1. Grosor y canto de la galería: ${ajustesBase.fondo} y ${ajustesBase.bisel}.</p>`;
+  $('#props').innerHTML = html;
+}
+
+$('#props').addEventListener('change', (e) => {
+  const el = e.target, c = capaSel();
+  if (el.dataset.g) {
+    const a = doc.ajustes;
+    if (el.dataset.g === 'color') {
+      const k = new THREE.Color(el.value);  // sRGB del selector -> lineal, como glTF
+      a.color = [num(k.r, 4), num(k.g, 4), num(k.b, 4), 1];
+    } else if (Number(el.value) > 0) a[el.dataset.g] = Number(el.value);
+  } else if (c) {
+    const p = el.dataset.p, v = el.value, b = caja(c);
+    if (p === 'nombre') c.nombre = v || c.nombre;
+    else if (p === 'op') c.op = v;
+    else if (!Number.isFinite(Number(v))) return;
+    else if (p === 'x' || p === 'y') c.t[p] = Number(v);
+    else if (p === 'r') c.t.r = Number(v) * Math.PI / 180;
+    else if (p === 'w' && Number(v) > 0) c.t.sx = Math.sign(c.t.sx) * Number(v) / (b[2] - b[0] || 1);
+    else if (p === 'h' && Number(v) > 0) c.t.sy = Math.sign(c.t.sy) * Number(v) / (b[3] - b[1] || 1);
+  }
+  el.blur();
+  commit();
+});
+$('#props').addEventListener('click', (e) => { if (e.target.id === 'bSimplificar') simplificar(); });
+
+$('#capas').addEventListener('click', (e) => {
+  const li = e.target.closest('li'); if (!li) return;
+  const c = doc.capas.find((x) => x.id === Number(li.dataset.id));
+  if (e.target.dataset.accion === 'ojo') { c.visible = !c.visible; commit(); return; }
+  if (sel !== c.id) { sel = c.id; nodos = false; nodoSel = null; }
+  todo();
+});
+$('#capas').addEventListener('dblclick', (e) => {
+  const nom = e.target.closest('.nom'); if (!nom) return;
+  const c = capaSel();
+  nom.innerHTML = `<input value="${esc(c.nombre)}">`;
+  const inp = nom.firstChild; inp.focus(); inp.select();
+  const fin = () => { c.nombre = inp.value.trim() || c.nombre; commit(); };
+  inp.addEventListener('blur', fin, { once: true });
+  inp.addEventListener('keydown', (k) => { if (k.key === 'Enter') inp.blur(); if (k.key === 'Escape') { inp.value = c.nombre; inp.blur(); } });
+});
+
+// ---------- historia
+function commit() {
+  const s = JSON.stringify(doc);
+  if (historia[puntero] !== s) {
+    historia = historia.slice(0, puntero + 1); historia.push(s); puntero++;
+    if (historia.length > 200) { historia.shift(); puntero--; }
+    cambioGeo();
+    if (!enServidor && s !== guardado) guardar(true);  // la primera edición ya queda a salvo
+  }
+  todo();
+}
+function irA(i) {
+  if (i < 0 || i >= historia.length) return;
+  puntero = i; doc = JSON.parse(historia[i]);
+  if (!capaSel()) { sel = null; nodos = false; }
+  nodoSel = null; cambioGeo(); todo();
+}
+function todo() {
+  dibujar(); capasUI(); panel();
+  document.querySelectorAll('[data-herr]').forEach((b) => b.classList.toggle('activo', b.dataset.herr === herramienta));
+  $('#bNodos').classList.toggle('activo', nodos);
+  titulo();
+}
+function titulo() { document.title = `${JSON.stringify(doc) !== guardado ? '● ' : ''}${nombre} · Editor de símbolos`; }
+
+// ---------- ratón
+let arrastre = null, espacio = false, ultimoClic = { t: 0, id: null };
+$('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven en #sobre
+  const m = deEvento(e), el = e.target, c = capaSel();
+  if (e.button === 1 || espacio) { empezarGesto(); arrastre = { tipo: 'pan', x: e.clientX, y: e.clientY, cx: vista.cx, cy: vista.cy }; return; }
+  if (e.button !== 0) return;
+  if (herramienta !== 'mover') { arrastre = { tipo: 'dibujo', a: m, b: m }; return; }
+  const id = Number(el.dataset.id) || null;
+  const doble = id && id === ultimoClic.id && e.timeStamp - ultimoClic.t < 350;
+  ultimoClic = { t: e.timeStamp, id };
+  if (el.dataset.asa === 'rot') {
+    const b = caja(c), cl = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2], C = aMundo(c.t, cl);
+    arrastre = { tipo: 'rot', cl, C, a0: Math.atan2(m[1] - C[1], m[0] - C[0]), t0: { ...c.t } };
+  } else if (el.dataset.asa) {
+    const k = Number(el.dataset.asa), q = esquinas(caja(c));
+    arrastre = { tipo: 'escala', q: q[k], o: q[(k + 2) % 4], O: aMundo(c.t, q[(k + 2) % 4]), t0: { ...c.t } };
+  } else if (el.dataset.nodo) {
+    const [k, i] = el.dataset.nodo.split(',').map(Number);
+    nodoSel = { k, i }; arrastre = { tipo: 'nodo', k, i };
+  } else if (id && nodos && id === sel) {
+    if (doble) insertarNodo(m);
+  } else if (id) {
+    // el doble clic que abre los nodos se decide al soltar: si la segunda pulsación
+    // arrastra, es un movimiento (como el dblclick del navegador)
+    const abreNodos = doble && id === sel;
+    if (id !== sel) { nodos = false; nodoSel = null; }
+    sel = id; arrastre = { tipo: 'mover', m0: m, t0: { ...capaSel().t }, abreNodos };
+  } else { sel = null; nodos = false; nodoSel = null; }
+  todo();
+});
+addEventListener('pointermove', (e) => {
+  if (!arrastre) return;
+  const m = deEvento(e), c = capaSel(), A = arrastre;
+  if (A.tipo === 'pan') {
+    vista.cx = A.cx - (e.clientX - A.x) / vista.zoom; vista.cy = A.cy + (e.clientY - A.y) / vista.zoom;
+    seguirGesto(); return;
+  }
+  if (A.tipo === 'dibujo') { A.b = m; sobre(); return; }
+  if (A.tipo === 'mover') { c.t.x = A.t0.x + m[0] - A.m0[0]; c.t.y = A.t0.y + m[1] - A.m0[1]; }
+  if (A.tipo === 'nodo') {
+    c.anillos = [...c.anillos];  // lista nueva: su trazado cacheado ya no vale
+    c.anillos[A.k] = [...c.anillos[A.k]];
+    c.anillos[A.k][A.i] = aLocal(c.t, m);
+  }
+  if (A.tipo === 'escala') {
+    // la esquina opuesta queda fija: la escala sale de la distancia a ella en el marco girado
+    const [co, si] = trig(A.t0), dx = m[0] - A.O[0], dy = m[1] - A.O[1];
+    let sx = (co * dx + si * dy) / (A.q[0] - A.o[0] || 1e-9), sy = (-si * dx + co * dy) / (A.q[1] - A.o[1] || 1e-9);
+    if (e.shiftKey) {
+      const k = Math.max(Math.abs(sx / A.t0.sx), Math.abs(sy / A.t0.sy));
+      sx = (Math.sign(sx) || 1) * Math.abs(A.t0.sx) * k; sy = (Math.sign(sy) || 1) * Math.abs(A.t0.sy) * k;
+    }
+    if (Math.abs(sx) < 1e-4) sx = 1e-4; if (Math.abs(sy) < 1e-4) sy = 1e-4;
+    const ax = A.o[0] * sx, ay = A.o[1] * sy;
+    Object.assign(c.t, { sx, sy, x: A.O[0] - (co * ax - si * ay), y: A.O[1] - (si * ax + co * ay) });
+  }
+  if (A.tipo === 'rot') {
+    let r = A.t0.r + Math.atan2(m[1] - A.C[1], m[0] - A.C[0]) - A.a0;
+    if (e.shiftKey) r = Math.round(r / (Math.PI / 12)) * Math.PI / 12;
+    const co = Math.cos(r), si = Math.sin(r), ax = A.cl[0] * c.t.sx, ay = A.cl[1] * c.t.sy;
+    Object.assign(c.t, { r, x: A.C[0] - (co * ax - si * ay), y: A.C[1] - (si * ax + co * ay) });
+  }
+  if (!A.movido) { A.movido = true; cambioGeo(); if (A.tipo !== 'nodo') empezarFlotante(c); }
+  if (flota) { moverFlotante(c); sobre(); } else refrescar(c);
+  seguir3D(c);
+  pedirPanel();
+});
+let panelPendiente = false;  // el panel numérico se refresca como mucho una vez por fotograma
+function pedirPanel() {
+  if (panelPendiente) return;
+  panelPendiente = true;
+  requestAnimationFrame(() => { panelPendiente = false; panel(); });
+}
+addEventListener('pointerup', (e) => {
+  const A = arrastre; arrastre = null;
+  if (!A) return;
+  if (A.tipo === 'pan') { terminarGesto(); return; }
+  if (flota) soltarFlotante();  // commit() redibuja el lienzo con la capa en su sitio
+  if (A.tipo === 'mover' && A.abreNodos && !A.movido) {
+    nodos = true; nodoSel = null;
+    ultimoClic = { t: 0, id: null };  // un tercer clic rápido no es otro doble clic
+  }
+  if (A.tipo === 'dibujo') {
+    let w = Math.abs(A.b[0] - A.a[0]), h = Math.abs(A.b[1] - A.a[1]);
+    if (e.shiftKey) w = h = Math.max(w, h);
+    let x = A.a[0] + Math.sign(A.b[0] - A.a[0]) * w / 2, y = A.a[1] + Math.sign(A.b[1] - A.a[1]) * h / 2;
+    if (w < 4 / vista.zoom && h < 4 / vista.zoom) { w = h = 0.1; [x, y] = A.a; }  // clic sin arrastrar
+    const elipse = herramienta === 'elipse';
+    const anillo = elipse
+      ? Array.from({ length: 128 }, (_, i) => [0.5 * Math.cos(i * Math.PI / 64), 0.5 * Math.sin(i * Math.PI / 64)])
+      : [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]];
+    const n = doc.capas.filter((c) => c.nombre.startsWith(elipse ? 'Elipse' : 'Rectángulo')).length + 1;
+    doc.capas.push({ id: idSig++, nombre: `${elipse ? 'Elipse' : 'Rectángulo'} ${n}`, op: 'unir', visible: true,
+      anillos: [anillo], t: { x, y, r: 0, sx: Math.max(w, 1e-3), sy: Math.max(h, 1e-3) } });
+    sel = doc.capas.at(-1).id; nodos = false; herramienta = 'mover';
+  }
+  commit();
+});
+$('#dos').addEventListener('wheel', (e) => {
+  e.preventDefault();
+  empezarGesto();
+  if (e.ctrlKey || e.metaKey) {  // pellizco del trackpad llega como ctrl + rueda
+    const m = deEvento(e);
+    vista.zoom = Math.min(50000, Math.max(50, vista.zoom * Math.exp(-e.deltaY * 0.01)));
+    const m2 = deEvento(e); vista.cx += m[0] - m2[0]; vista.cy += m[1] - m2[1];
+  } else { vista.cx += e.deltaX / vista.zoom; vista.cy -= e.deltaY / vista.zoom; }
+  seguirGesto();
+  clearTimeout(finGesto); finGesto = setTimeout(terminarGesto, 150);
+}, { passive: false });
+
+// ---------- nodos
+function insertarNodo(m) {
+  const c = capaSel(), W = anillosMundo(c);
+  let mejor = { d: Infinity };
+  W.forEach((r, k) => r.forEach((a, i) => {
+    const b = r[(i + 1) % r.length], [d, t] = distSeg(m, a, b);
+    if (d < mejor.d) mejor = { d, k, i, p: [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])] };
+  }));
+  c.anillos = c.anillos.map((r, k) => k === mejor.k ? r.toSpliced(mejor.i + 1, 0, aLocal(c.t, mejor.p)) : r);
+  nodoSel = { k: mejor.k, i: mejor.i + 1 };
+  commit();
+}
+function borrarNodo() {
+  const c = capaSel(), r = c.anillos[nodoSel.k];
+  if (r.length > 3) c.anillos = c.anillos.map((a, k) => k === nodoSel.k ? a.toSpliced(nodoSel.i, 1) : a);
+  else if (nodoSel.k > 0) c.anillos = c.anillos.toSpliced(nodoSel.k, 1);  // un hueco de 3 nodos desaparece entero
+  else return;
+  nodoSel = null; commit();
+}
+function simplificar() {
+  // Douglas-Peucker en el mundo sobre cada anillo cerrado
+  const c = capaSel(), tol = 0.0015;
+  c.anillos = c.anillos.map((r) => {
+    const w = [...r.map((p) => aMundo(c.t, p)), aMundo(c.t, r[0])];
+    const guarda = new Uint8Array(w.length); guarda[0] = guarda[w.length - 1] = 1;
+    const pila = [[0, w.length - 1]];
+    while (pila.length) {
+      const [a, b] = pila.pop(); let dm = 0, im = -1;
+      for (let i = a + 1; i < b; i++) { const d = distSeg(w[i], w[a], w[b])[0]; if (d > dm) { dm = d; im = i; } }
+      if (dm > tol) { guarda[im] = 1; pila.push([a, im], [im, b]); }
+    }
+    const nuevo = r.filter((_, i) => guarda[i]);
+    return nuevo.length >= 3 ? nuevo : r;
+  });
+  nodoSel = null; commit();
+}
+
+// ---------- teclado
+addEventListener('keydown', (e) => {
+  if (e.target.matches('input, select')) return;
+  const mod = e.metaKey || e.ctrlKey, c = capaSel(), k = e.key.toLowerCase();
+  if (e.code === 'Space') { e.preventDefault(); if (!espacio) { espacio = true; lienzo.classList.add('pan'); } return; }
+  if (mod && k === 'z') { e.preventDefault(); irA(puntero + (e.shiftKey ? 1 : -1)); return; }
+  if (mod && k === 'd') { e.preventDefault(); duplicar(); return; }
+  if (mod && k === 's') { e.preventDefault(); guardar(); return; }
+  if (mod) return;
+  if (k === 'v') herr('mover');
+  else if (k === 'r') herr('rect');
+  else if (k === 'o') herr('elipse');
+  else if (e.key === 'Enter' && c) { nodos = !nodos; nodoSel = null; todo(); }
+  else if (e.key === 'Escape') { if (nodos) nodos = false; else sel = null; nodoSel = null; herramienta = 'mover'; todo(); }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && c) { e.preventDefault(); nodos && nodoSel ? borrarNodo() : borrarCapa(); }
+  else if (e.key.startsWith('Arrow') && c) {
+    e.preventDefault();
+    const paso = e.shiftKey ? 0.01 : 0.001;
+    const d = { ArrowLeft: [-paso, 0], ArrowRight: [paso, 0], ArrowUp: [0, paso], ArrowDown: [0, -paso] }[e.key];
+    if (nodos && nodoSel) {
+      const w = aMundo(c.t, c.anillos[nodoSel.k][nodoSel.i]), { k: kk, i } = nodoSel;
+      c.anillos = c.anillos.map((r, j) => j === kk ? r.with(i, aLocal(c.t, [w[0] + d[0], w[1] + d[1]])) : r);
+    } else { c.t.x += d[0]; c.t.y += d[1]; }
+    commit();
+  }
+});
+addEventListener('keyup', (e) => { if (e.code === 'Space') { espacio = false; lienzo.classList.remove('pan'); } });
+
+function herr(h) { herramienta = h; if (h !== 'mover') nodos = false; todo(); }
+function duplicar() {
+  const c = capaSel(); if (!c) return;
+  const copia = JSON.parse(JSON.stringify(c));
+  Object.assign(copia, { id: idSig++, nombre: c.nombre + ' copia' });
+  copia.t.x += 0.02; copia.t.y -= 0.02;
+  doc.capas.splice(doc.capas.indexOf(c) + 1, 0, copia);
+  sel = copia.id; commit();
+}
+function borrarCapa() { doc.capas = doc.capas.filter((c) => c.id !== sel); sel = null; nodos = false; commit(); }
+function moverCapa(d) {
+  const c = capaSel(); if (!c) return;
+  const i = doc.capas.indexOf(c), j = i + d;
+  if (j < 0 || j >= doc.capas.length) return;
+  [doc.capas[i], doc.capas[j]] = [doc.capas[j], doc.capas[i]]; commit();
+}
+document.querySelectorAll('[data-herr]').forEach((b) => b.addEventListener('click', () => herr(b.dataset.herr)));
+$('#bNodos').addEventListener('click', () => { if (capaSel()) { nodos = !nodos; nodoSel = null; herramienta = 'mover'; todo(); } });
+$('#bDeshacer').addEventListener('click', () => irA(puntero - 1));
+$('#bRehacer').addEventListener('click', () => irA(puntero + 1));
+$('#bSubir').addEventListener('click', () => moverCapa(1));
+$('#bBajar').addEventListener('click', () => moverCapa(-1));
+$('#bDuplicar').addEventListener('click', duplicar);
+$('#bBorrar').addEventListener('click', () => capaSel() && borrarCapa());
+
+// ---------- 3D
+// se dibuja solo cuando algo cambia (cámara, modelo o tamaño), no en cada fotograma
+const caja3 = $('#tres');
+const render = new THREE.WebGLRenderer({ antialias: true });
+render.setPixelRatio(devicePixelRatio);
+render.toneMapping = THREE.ACESFilmicToneMapping;
+caja3.prepend(render.domElement);
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0x1a1512);
+escena.environment = new THREE.PMREMGenerator(render).fromScene(new RoomEnvironment(), 0.04).texture;
+const camara = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+camara.position.set(0.35, -0.22, 1).normalize().multiplyScalar(2.1);
+const luz = new THREE.DirectionalLight(0xffffff, 2); luz.position.set(1, 2, 3); escena.add(luz);
+const controles = new OrbitControls(camara, render.domElement); controles.enableDamping = true;
+// Zoom propio con suavizado: OrbitControls aplica cada evento de rueda de golpe y un
+// trackpad los manda a ráfagas irregulares (0 en un fotograma, 4 en el siguiente), así
+// que la cámara avanzaba a saltos aunque el navegador fuera a 60 fps. Cada evento mueve
+// la distancia objetivo; la cámara la persigue en cada fotograma (constante 60 ms).
+// Misma sensibilidad que OrbitControls: 0,95 por cada 100 de delta, ×10 si es pellizco.
+controles.enableZoom = false;
+let distObjetivo = null, ultimoFotograma = performance.now();
+render.domElement.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const delta = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1) * (e.ctrlKey ? 10 : 1);
+  const d = distObjetivo ?? camara.position.distanceTo(controles.target);
+  distObjetivo = Math.min(20, Math.max(0.15, d * Math.pow(0.95, -delta * 0.01)));
+}, { passive: false });
+function seguirZoom(dt) {
+  if (distObjetivo === null) return;
+  const off = camara.position.clone().sub(controles.target), d = off.length();
+  const nueva = d + (distObjetivo - d) * (1 - Math.exp(-dt / 60));
+  camara.position.copy(controles.target).add(off.multiplyScalar(nueva / d));
+  if (Math.abs(nueva - distObjetivo) < distObjetivo * 1e-4) distObjetivo = null;
+  pintar3d = true;
+}
+let modelo = null, pintar3d = true, dibujados3d = 0;
+const laca = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0 });
+function poner(obj, etiqueta) {
+  // las geometrías de capa (userData.cache) se reutilizan: no se liberan al cambiar de modelo
+  if (modelo) { escena.remove(modelo); modelo.traverse((o) => { if (!o.userData.cache) o.geometry?.dispose(); }); }
+  modelo = obj; if (obj) escena.add(obj);
+  $('#etiqueta3d').textContent = etiqueta;
+  pintar3d = true;
+}
+function extruir(polis) {  // [[exterior, hueco...], ...] -> sólido con canto (aproximado)
+  const { fondo, bisel, color } = doc.ajustes;
+  laca.color.setRGB(color[0], color[1], color[2], THREE.LinearSRGBColorSpace);
+  const limpio = (r) => { const p = r.map(([x, y]) => new THREE.Vector2(x, y)); if (p.length > 1 && p[0].equals(p.at(-1))) p.pop(); return p; };
+  const formas = polis.map((poli) => {
+    const f = new THREE.Shape(limpio(poli[0]));
+    f.holes = poli.slice(1).map((r) => new THREE.Path(limpio(r)));
+    return f;
+  });
+  const prof = Math.max(fondo - 2 * bisel, 1e-4);
+  const g = new THREE.ExtrudeGeometry(formas, { depth: prof, curveSegments: 1, bevelEnabled: true,
+    bevelThickness: bisel, bevelSize: bisel, bevelOffset: -bisel, bevelSegments: 4 });
+  g.translate(0, 0, -prof / 2);
+  return g;
+}
+function construir3D() {
+  poner(new THREE.Mesh(extruir(resultado), laca), 'Planta exacta, canto aproximado · «Generar GLB» da el acabado final');
+}
+// Mientras se edita, el 3D sigue al ratón: cada capa que une es su propio sólido, extruido
+// una vez en coordenadas locales y colocado con su t; arrastrar solo cambia su matriz.
+// Las restas y el redondeo aparecen cuando llega la geometría exacta.
+const solidos = new WeakMap();  // anillos -> { g, clave }
+function solidoCapa(c) {
+  const clave = `${doc.ajustes.fondo},${doc.ajustes.bisel}`;
+  let s = solidos.get(c.anillos);
+  if (!s || s.clave !== clave) { s = { g: extruir([c.anillos]), clave }; solidos.set(c.anillos, s); }
+  return s.g;
+}
+function colocar(m, t) { m.position.set(t.x, t.y, 0); m.rotation.set(0, 0, t.r); m.scale.set(t.sx, t.sy, 1); }
+function provisional3D() {
+  const grupo = new THREE.Group();
+  for (const c of doc.capas) if (c.visible && c.op === 'unir') {
+    const m = new THREE.Mesh(solidoCapa(c), laca);
+    m.userData = { id: c.id, cache: true };
+    colocar(m, c.t); grupo.add(m);
+  }
+  const restas = doc.capas.some((c) => c.visible && c.op === 'restar');
+  poner(grupo, `Vista 3D provisional${restas ? ' (sin las restas)' : ''} · calculando la exacta…`);
+}
+let capa3dPendiente = null;  // como mucho una actualización por fotograma
+function seguir3D(c) {
+  if (capa3dPendiente) { capa3dPendiente = c; return; }
+  capa3dPendiente = c;
+  requestAnimationFrame(() => {
+    const c = capa3dPendiente; capa3dPendiente = null;
+    const m = modelo?.children?.find((o) => o.userData.id === c.id);
+    if (!m) return;
+    m.geometry = solidoCapa(c);  // mismo objeto salvo que se editaran los nodos
+    colocar(m, c.t); pintar3d = true;
+  });
+}
+function encuadrar() {  // como visor.html: la esfera que envuelve el símbolo cabe en el campo de visión
+  const pts = doc.capas.filter((c) => c.visible).flatMap((c) => anillosMundo(c).flat());
+  if (!pts.length) return;
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const radio = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), doc.ajustes.fondo) / 2;
+  const fov = THREE.MathUtils.degToRad(camara.fov) / 2;
+  const dist = radio / Math.sin(Math.min(fov, Math.atan(Math.tan(fov) * camara.aspect))) * 1.1;
+  controles.target.set(cx, cy, 0); distObjetivo = null;
+  camara.position.set(cx, cy, 0).add(new THREE.Vector3(0.35, -0.22, 1).normalize().multiplyScalar(dist));
+  pintar3d = true;
+}
+function tamano3d() {
+  const r = caja3.getBoundingClientRect();
+  render.setSize(r.width, r.height); camara.aspect = r.width / r.height; camara.updateProjectionMatrix();
+  pintar3d = true;
+}
+new ResizeObserver(() => { tamano3d(); if (doc) vistaCambiada(); }).observe(caja3);
+(function bucle(ahora = performance.now()) {
+  requestAnimationFrame(bucle);
+  seguirZoom(Math.min(ahora - ultimoFotograma, 100)); ultimoFotograma = ahora;
+  if (controles.update() || pintar3d) { pintar3d = false; render.render(escena, camara); dibujados3d++; }
+})();
+
+// ---------- archivos
+function estado(txt, error = false) { const s = $('#estado'); s.innerHTML = txt; s.classList.toggle('error', error); }
+async function api(ruta, cuerpo) {
+  const r = await fetch(ruta, cuerpo ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo) } : {});
+  return r.json();
+}
+function nombreValido(callado = false) {
+  nombre = $('#nombre').value.trim();
+  if (NOMBRE.test(nombre)) return true;
+  if (!callado) estado('Nombre: minúsculas, números y guiones', true);
+  return false;
+}
+function yaGuardado() {
+  guardado = JSON.stringify(doc); enServidor = true; titulo();
+  history.replaceState(null, '', `?s=${nombre}`);  // al recargar se abre este documento
+}
+async function guardar(auto = false) {
+  if (!nombreValido(auto)) return;
+  const texto = JSON.stringify(doc);
+  const r = await api('/api/guardar', { nombre, doc });
+  if (r.error) return estado(auto ? `No se guardó solo: ${r.error}` : r.error, true);
+  if (JSON.stringify(doc) === texto) yaGuardado(); else { enServidor = true; titulo(); }
+  if (auto && generando) return;  // no tapar «Generando GLB…» ni su resultado
+  estado(auto ? `Guardado automático ${new Date().toLocaleTimeString('es')}` : `Guardado en editor/${nombre}.json`);
+}
+$('#bGuardar').addEventListener('click', () => guardar());
+setInterval(() => { if (doc && enServidor && JSON.stringify(doc) !== guardado) guardar(true); }, 30000);
+addEventListener('pagehide', () => {  // lo de los últimos segundos, al cerrar la pestaña
+  if (doc && JSON.stringify(doc) !== guardado && nombreValido(true))
+    navigator.sendBeacon('/api/guardar', JSON.stringify({ nombre, doc }));
+});
+let generando = false;
+$('#bGenerar').addEventListener('click', async () => {
+  if (!nombreValido()) return;
+  estado('Generando GLB…');
+  generando = true;
+  const r = await api('/api/generar', { nombre, doc, capas: capasMundo() }).finally(() => { generando = false; });
+  if (r.error) return estado(r.error, true);
+  yaGuardado();
+  estado(`glb/${nombre}.glb · ${r.piezas} pieza(s) · ${r.triangulos.toLocaleString('es')} triángulos · ` +
+    `${r.estanca ? 'malla cerrada' : '<b>malla abierta</b>'} · <a href="visor.html?s=${nombre}" target="_blank">visor</a>`, !r.estanca);
+  new GLTFLoader().load(`glb/${nombre}.glb?v=${Date.now()}`, (g) => poner(g.scene, `glb/${nombre}.glb — acabado exacto`));
+});
+
+function migrar(d) {  // documentos anteriores al campo version: mismo formato
+  d.version ??= 1;
+  return d;
+}
+async function abrir(s) {
+  if (JSON.stringify(doc) !== guardado && doc?.capas.length && !confirm('Hay cambios sin guardar. ¿Descartarlos?')) {
+    $('#abrir').value = ''; return;
+  }
+  let r;
+  if (s === '+nuevo') r = { nombre: 'simbolo-nuevo', doc: { version: 1, origen: null, capas: [], ajustes: { ...ajustesBase } } };
+  else r = await api(`/api/abrir?s=${encodeURIComponent(s)}`);
+  if (r.error) return estado(r.error, true);
+  doc = migrar(r.doc); nombre = r.nombre; $('#nombre').value = nombre;
+  enServidor = r.nombre === s;  // abierto de editor/<nombre>.json
+  idSig = Math.max(0, ...doc.capas.map((c) => c.id || 0)) + 1;
+  for (const c of doc.capas) c.id ??= idSig++;
+  sel = null; nodos = false; nodoSel = null; herramienta = 'mover';
+  const [w, h] = tam(); Object.assign(vista, { cx: 0, cy: 0, zoom: Math.min(w, h) * 0.8 });
+  historia = []; puntero = -1; guardado = JSON.stringify(doc);
+  if (s !== '+nuevo') history.replaceState(null, '', `?s=${s}`);
+  $('#abrir').value = '';
+  commit(); encuadrar();
+  estado(s === '+nuevo' ? 'Documento en blanco' : `Abierto ${s} · ${doc.capas.length} capa(s)` +
+    (r.nombre !== s ? ` · se guardará como ${r.nombre}` : ''));
+}
+$('#abrir').addEventListener('change', (e) => e.target.value && abrir(e.target.value));
+
+// para las pruebas de tests/: estado de solo lectura
+window.editor = { dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado };
+
+const lista = await api('/api/simbolos');
+ajustesBase = lista.ajustes;
+$('#abrir').innerHTML = `<option value="">Abrir…</option><option value="+nuevo">Nuevo en blanco</option>` +
+  (lista.editados.length ? `<optgroup label="Editados">${lista.editados.map((n) => `<option>${n}</option>`).join('')}</optgroup>` : '') +
+  `<optgroup label="Símbolos">${lista.simbolos.map((n) => `<option>${n}</option>`).join('')}</optgroup>`;
+tamano3d();
+await abrir(new URLSearchParams(location.search).get('s') || lista.editados[0] || 'shou-circular');
+</script>
+</body>
+</html>

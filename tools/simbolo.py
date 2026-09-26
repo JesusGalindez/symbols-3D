@@ -130,23 +130,23 @@ def sin_duplicados(p, minimo):
     return Polygon(anillo(p.exterior), [anillo(h) for h in p.interiors])
 
 
-def pieza(p, fondo, bisel):
+def pieza(p, fondo, bisel, pasos=None):
     """Prueba el canto completo y, si no cabe en alguna esquina, uno menor."""
     for f in (1, 0.75, 0.5):
-        m, ok = pieza_con(p, fondo, bisel * f)
+        m, ok = pieza_con(p, fondo, bisel * f, pasos)
         if ok:
             return m, True
     return m, False
 
 
-def pieza_con(p, fondo, bisel):
+def pieza_con(p, fondo, bisel, pasos=None):
     """Extrusión con canto redondeado (cuarto de círculo) delante y detrás.
     orient: el exterior va antihorario, los agujeros horario, así la izquierda
     de cada arista apunta siempre hacia el material."""
     p = orient(sin_duplicados(p.simplify(1e-6 * DIAMETRO), 8e-4 * DIAMETRO))
     anillos = [p.exterior, *p.interiors]
     # perfil de atrás hacia delante: (hundimiento, z)
-    th = np.linspace(0, np.pi / 2, PASOS + 1)
+    th = np.linspace(0, np.pi / 2, (pasos or PASOS) + 1)
     hunde = lambda t: round(bisel * (1 - np.cos(t)), 12)
     atras = [(hunde(t), bisel * (1 - np.sin(t))) for t in th[::-1]]
     delante = [(hunde(t), fondo - bisel + bisel * np.sin(t)) for t in th]
@@ -189,10 +189,10 @@ def pieza_con(p, fondo, bisel):
     return m, True
 
 
-def redondear_planta(geo, r, r_entrante=None):
+def redondear_planta(geo, r, r_entrante=None, esquina=None):
     """Redondea en planta esquinas convexas y cóncavas con radio r: aspecto tallado,
     y el canto redondeado (mismo radio) cabe sin cruzarse en esquinas agudas."""
-    q = ESQUINA
+    q = esquina or ESQUINA
     re_ = r if r_entrante is None else r_entrante
     return geo.buffer(-r, quad_segs=q).buffer(r, quad_segs=q).buffer(re_, quad_segs=q).buffer(-re_, quad_segs=q)
 
@@ -215,21 +215,24 @@ def suavizar(m):
     return m
 
 
-def exportar(geo, nombre):
+def exportar(geo, nombre, fondo=None, bisel=None, color=None, pasos=None, carpeta=None):
     """Geometría 2D normalizada -> svg/<nombre>.svg y glb/<nombre>.glb con canto
-    redondeado, laca roja y normales finales. Común a símbolos y letras."""
-    svg(geo, RAIZ / "svg" / f"{nombre}.svg")
+    redondeado, laca roja y normales finales. Común a símbolos y letras.
+    Sin argumentos usa los globales del módulo, leídos al llamar (redibujar.py y
+    letras.py cambian PASOS para la versión ligera); carpeta: otra raíz de salida."""
+    carpeta = Path(carpeta or RAIZ)
+    svg(geo, carpeta / "svg" / f"{nombre}.svg")
     mallas, biseladas = [], 0
     for p in lista(geo):
-        m, ok = pieza(p, FONDO * DIAMETRO, BISEL * DIAMETRO)
+        m, ok = pieza(p, (fondo or FONDO) * DIAMETRO, (bisel or BISEL) * DIAMETRO, pasos)
         mallas.append(m)
         biseladas += ok
     estanca = all(m.is_watertight for m in mallas)
     malla = trimesh.util.concatenate(mallas)
     malla.visual = trimesh.visual.TextureVisuals(material=trimesh.visual.material.PBRMaterial(
-        name="laca", baseColorFactor=COLOR, metallicFactor=0.0, roughnessFactor=0.35))
+        name="laca", baseColorFactor=color or COLOR, metallicFactor=0.0, roughnessFactor=0.35))
     malla = suavizar(malla)  # después del material: asignarlo borra las normales calculadas
-    malla.export(RAIZ / "glb" / f"{nombre}.glb")
+    malla.export(carpeta / "glb" / f"{nombre}.glb")
     return {"piezas": len(mallas), "biseladas": biseladas,
             "triangulos": len(malla.faces), "estanca": bool(estanca)}
 
