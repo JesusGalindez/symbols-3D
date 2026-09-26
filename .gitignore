@@ -7,3 +7,5 @@ video/*-v1.mp4
 fuentes/shou-sello.png
 fuentes/xi-doble.png
 node_modules/
+# documentos del editor (trabajo en curso, con su historial): no se publican
+editor/
