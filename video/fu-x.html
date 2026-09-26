@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>福 · vídeo para X</title>
+<style>html,body{margin:0;background:#000}canvas{display:block;width:540px;height:675px}</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+"three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<canvas id="salida"></canvas>
+<script type="module">
+// Vídeo del 福 para X: 1080×1350 (4:5), 30 fps, 10 s. Cada fotograma es función pura del
+// tiempo (nada depende del reloj real), así el render es idéntico en cada pasada.
+// ?previa=1 lo reproduce en tiempo real, ?t=4.5 pinta ese instante; sin nada exporta a /frame.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+
+const BRILLO = parseFloat(new URLSearchParams(location.search).get('brillo') || 16);
+const W = 1080, H = 1350, FPS = 30, DURACION = 10, SS = 1.5;  // SS: supermuestreo
+const params = new URLSearchParams(location.search);
+const MODELO = params.get('s') || 'fu-hiragino';
+
+// ---------- utilidades ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const tramo = (t, a, b) => clamp((t - a) / (b - a));
+const suave = x => x * x * (3 - 2 * x);
+const salida = x => 1 - Math.pow(1 - x, 3);            // ease-out cúbico
+const entradaSalida = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+function azar(sem) { return () => ((sem = (sem * 1664525 + 1013904223) >>> 0) / 4294967296); }
+
+// ---------- 3D ----------
+const render = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+render.setPixelRatio(1);
+render.setSize(W * SS, H * SS, false);
+render.toneMapping = THREE.ACESFilmicToneMapping;
+render.toneMappingExposure = 1.05;
+render.outputColorSpace = THREE.SRGBColorSpace;
+
+const escena = new THREE.Scene();
+escena.environment = new THREE.PMREMGenerator(render).fromScene(new RoomEnvironment(), 0.04).texture;
+escena.environmentIntensity = 0.55;
+const camara = new THREE.PerspectiveCamera(30, W / H, 0.01, 100);
+
+const clave = new THREE.DirectionalLight(0xffe2c0, 2.2);   // luz principal cálida
+clave.position.set(-1.5, 2, 3);
+const contra = new THREE.DirectionalLight(0xffb070, 2.5);  // contraluz: perfila el canto
+contra.position.set(2, 1, -2.5);
+// barrido: una tira de luz (softbox alta y estrecha, inclinada) que pasa por delante; en la
+// laca se refleja como una franja de brillo que recorre el carácter, como en un anuncio de producto
+RectAreaLightUniformsLib.init();
+const barrido = new THREE.RectAreaLight(0xffe6c8, 0, 0.05, 4);
+barrido.rotation.z = THREE.MathUtils.degToRad(-22);
+escena.add(clave, contra, barrido);
+
+const pivote = new THREE.Group();
+escena.add(pivote);
+const gltf = await new GLTFLoader().loadAsync(`../glb/${MODELO}.glb?v=${Date.now()}`);
+const modelo = gltf.scene;
+const caja = new THREE.Box3().setFromObject(modelo);
+const centro = caja.getCenter(new THREE.Vector3());
+const tam = caja.getSize(new THREE.Vector3());
+modelo.position.sub(centro);  // girar alrededor de su centro, frente incluido
+pivote.add(modelo);
+modelo.traverse(o => { if (o.material) { o.material.roughness = 0.2; o.material.envMapIntensity = 1; } });
+const radio = tam.length() / 2;
+// encuadre final calculado, no a ojo: en 4:5 manda el campo de visión horizontal.
+// El ancho ocupa el 70 % y la base del carácter queda por encima del rótulo (~72 % del alto).
+const mitadV = THREE.MathUtils.degToRad(camara.fov / 2);
+const mitadH = Math.atan(Math.tan(mitadV) * W / H);
+const DFIN = (tam.x / 2 / 0.70) / Math.tan(mitadH) + tam.z / 2;
+const ALTO_FIN = DFIN * Math.tan(mitadV);          // media altura visible al final
+const Y_MODELO = tam.y / 2 - 0.44 * ALTO_FIN;      // base a 0,44 medias alturas bajo el centro
+
+// ---------- 2D: fondo, polvo, rótulo, viñeta, grano ----------
+const lienzo = document.getElementById('salida');
+lienzo.width = W; lienzo.height = H;
+const g = lienzo.getContext('2d');
+
+const r = azar(7);
+const polvo = Array.from({ length: 70 }, () => ({
+  x: r() * W, y: r() * H, z: r(),            // z: profundidad (0 lejos, 1 cerca)
+  v: 8 + r() * 22, fase: r() * Math.PI * 2, brillo: .25 + r() * .75,
+}));
+const grano = document.createElement('canvas');
+grano.width = grano.height = 256;
+{
+  const gg = grano.getContext('2d'), img = gg.createImageData(256, 256), rr = azar(3);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = rr() * 255; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 14;
+  }
+  gg.putImageData(img, 0, 0);
+}
+
+function fondo(t) {
+  const gr = g.createRadialGradient(W / 2, H * .43, 40, W / 2, H * .45, H * .75);
+  gr.addColorStop(0, '#3a0f0a');
+  gr.addColorStop(.45, '#1c0605');
+  gr.addColorStop(1, '#060101');
+  g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  // halo dorado tras el carácter, respira despacio
+  const a = .16 + .05 * Math.sin(t * 1.3);
+  const h = g.createRadialGradient(W / 2, H * .42, 0, W / 2, H * .42, W * .55);
+  h.addColorStop(0, `rgba(255,170,90,${a})`); h.addColorStop(1, 'rgba(255,170,90,0)');
+  g.fillStyle = h; g.fillRect(0, 0, W, H);
+}
+
+function particulas(t, delante) {
+  for (const p of polvo) {
+    if ((p.z > .6) !== delante) continue;
+    const y = ((p.y - t * p.v * (0.4 + p.z)) % H + H) % H;
+    const x = p.x + Math.sin(t * .6 + p.fase) * 18 * p.z;
+    const tam_ = 1.2 + p.z * p.z * 9;                // cerca = grande y desenfocado
+    const alfa = p.brillo * (delante ? .22 : .5) * (.6 + .4 * Math.sin(t * 2 + p.fase));
+    const gr = g.createRadialGradient(x, y, 0, x, y, tam_ * 2.4);
+    gr.addColorStop(0, `rgba(255,210,140,${alfa})`); gr.addColorStop(1, 'rgba(255,190,110,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, tam_ * 2.4, 0, Math.PI * 2); g.fill();
+  }
+}
+
+function rotulo(t) {
+  const a = suave(tramo(t, 6.0, 7.2)), b = suave(tramo(t, 6.6, 7.8));
+  if (a <= 0) return;
+  g.save();
+  g.textAlign = 'center';
+  g.globalAlpha = a;
+  g.fillStyle = '#f6dcb4';
+  g.shadowColor = 'rgba(255,160,80,.45)'; g.shadowBlur = 30;
+  g.font = 'italic 124px Didot, "Bodoni 72", serif';
+  g.fillText('fú', W / 2, H * .835 + (1 - a) * 24);
+  g.shadowBlur = 0;
+  g.globalAlpha = b;
+  g.fillStyle = 'rgba(246,220,180,.85)';
+  g.font = '600 36px "Avenir Next", Avenir, sans-serif';
+  if ('letterSpacing' in g) g.letterSpacing = '9px';
+  g.fillText('BUENA SUERTE  ·  GOOD FORTUNE', W / 2, H * .9 + (1 - b) * 16);
+  // filete fino que se abre desde el centro
+  const l = 190 * suave(tramo(t, 6.9, 8.0));
+  g.globalAlpha = b * .7; g.fillStyle = '#e8b878';
+  g.fillRect(W / 2 - l, H * .853, l * 2, 2);
+  g.restore();
+}
+
+function acabado(t) {
+  const v = g.createRadialGradient(W / 2, H / 2, H * .32, W / 2, H / 2, H * .78);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.72)');
+  g.fillStyle = v; g.fillRect(0, 0, W, H);
+  g.save();
+  g.globalCompositeOperation = 'overlay';
+  const f = Math.floor(t * FPS);
+  g.fillStyle = g.createPattern(grano, 'repeat');
+  g.translate((f * 37) % 256, (f * 91) % 256);
+  g.fillRect(-256, -256, W + 512, H + 512);
+  g.restore();
+  const n = 1 - suave(tramo(t, 0, 1.2)) + suave(tramo(t, 9.4, 10));  // entrada y salida a negro
+  if (n > 0) { g.fillStyle = `rgba(0,0,0,${clamp(n)})`; g.fillRect(0, 0, W, H); }
+}
+
+// ---------- coreografía ----------
+function cuadro(t) {
+  const giro = salida(tramo(t, 0, 4.5));
+  const flota = Math.sin(t * .9) * .05 * suave(tramo(t, 4, 6));
+  pivote.rotation.y = THREE.MathUtils.degToRad(-55 * (1 - giro)) + flota;
+  pivote.rotation.x = THREE.MathUtils.degToRad(8 * (1 - giro)) + Math.sin(t * .7) * .015;
+  pivote.position.y = Y_MODELO + tam.y * .006 * Math.sin(t * 1.1);
+
+  const d0 = DFIN * .38, d1 = DFIN;
+  const d = d0 + (d1 - d0) * entradaSalida(tramo(t, 0, 5));
+  const deriva = .12 * Math.sin(t * .35);
+  camara.position.set(Math.sin(deriva) * d, radio * .05, Math.cos(deriva) * d);
+  camara.lookAt(0, Y_MODELO * (1 - entradaSalida(tramo(t, 0, 5))) * .9, 0);
+
+  // barrido: la franja cruza de izquierda a derecha una sola vez, ya con el carácter quieto
+  const s = suave(tramo(t, 4.8, 7.6));
+  barrido.intensity = BRILLO * Math.pow(Math.sin(Math.PI * s), 0.5);
+  barrido.position.set((-1.15 + 2.3 * s) * tam.x, Y_MODELO, DFIN * .3);
+
+  fondo(t);
+  particulas(t, false);
+  render.render(escena, camara);
+  g.drawImage(render.domElement, 0, 0, W, H);  // reduce el supermuestreo
+  particulas(t, true);
+  rotulo(t);
+  acabado(t);
+}
+
+// ---------- salida ----------
+if (params.get('t')) {
+  cuadro(parseFloat(params.get('t')));  // un solo instante, para revisar con una captura
+} else if (params.get('previa')) {
+  const t0 = performance.now();
+  (function bucle() { cuadro(((performance.now() - t0) / 1000) % DURACION); requestAnimationFrame(bucle); })();
+} else {
+  const total = FPS * DURACION;
+  for (let f = 0; f < total; f++) {
+    cuadro(f / FPS);
+    const blob = await new Promise(ok => lienzo.toBlob(ok, 'image/png'));
+    await fetch(`/frame/${String(f).padStart(4, '0')}.png`, { method: 'POST', body: blob });
+  }
+  await fetch('/fin', { method: 'POST' });
+}
+</script>
+</body>
+</html>

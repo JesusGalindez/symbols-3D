@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+.DS_Store
+video/cuadros/
+video/*-v1.mp4
+# imágenes fuente con marca de agua de bancos de imágenes: no se publican
+fuentes/shou-sello.png
+fuentes/xi-doble.png

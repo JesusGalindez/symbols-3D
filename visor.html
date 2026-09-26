@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Visor de símbolos</title>
+<style>html,body{margin:0;height:100%;background:#1a1512}canvas{display:block}</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+"three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<script type="module">
+// Uso: visor.html?s=shou-circular   (s=web/nombre para los comprimidos con meshopt)
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const nombre = new URLSearchParams(location.search).get('s') || 'shou-circular';
+const render = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+render.setSize(innerWidth, innerHeight);
+render.setPixelRatio(devicePixelRatio);
+render.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(render.domElement);
+
+const escena = new THREE.Scene();
+escena.environment = new THREE.PMREMGenerator(render).fromScene(new RoomEnvironment(), 0.04).texture;
+const camara = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.01, 100);
+camara.position.set(...(new URLSearchParams(location.search).get('cam') || '0.9,-0.55,1.6').split(',').map(Number));
+const luz = new THREE.DirectionalLight(0xffffff, 2);
+luz.position.set(1, 2, 3);
+escena.add(luz);
+
+const controles = new OrbitControls(camara, render.domElement);
+controles.enableDamping = true;
+const mira = new URLSearchParams(location.search).get('mira');  // punto al que mira: x,y,z
+if (mira) controles.target.set(...mira.split(',').map(Number));
+
+new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load(`glb/${nombre}.glb?v=${Date.now()}`,  // sin caché: siempre el modelo recién generado
+   (g) => {
+  escena.add(g.scene);
+  // encuadre automático: centra el modelo y aleja la cámara según su tamaño
+  // (una palabra es más ancha que un símbolo); ?cam= y ?mira= siguen mandando
+  const params = new URLSearchParams(location.search);
+  const caja = new THREE.Box3().setFromObject(g.scene);
+  const centro = caja.getCenter(new THREE.Vector3());
+  // distancia a la que la esfera que envuelve el modelo cabe en el campo de visión
+  const radio = caja.getSize(new THREE.Vector3()).length() / 2;
+  const fov = THREE.MathUtils.degToRad(camara.fov) / 2;
+  const dist = radio / Math.sin(Math.min(fov, Math.atan(Math.tan(fov) * camara.aspect))) * 1.1;
+  if (!params.get('mira')) controles.target.copy(centro);
+  if (!params.get('cam')) camara.position.copy(centro).add(new THREE.Vector3(0.35, -0.22, 1).normalize().multiplyScalar(dist));
+  document.title = `Visor · ${nombre}`;
+  document.body.dataset.listo = '1';
+});
+
+(function bucle() {
+  requestAnimationFrame(bucle);
+  controles.update();
+  render.render(escena, camara);
+})();
+addEventListener('resize', () => {
+  camara.aspect = innerWidth / innerHeight;
+  camara.updateProjectionMatrix();
+  render.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
