@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import shapely
 import trimesh
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
@@ -28,8 +29,11 @@ def salida(tmp_path, monkeypatch):
 
 
 def en_mundo(doc):
-    return [{"op": c["op"], "anillos": [[[x + c["t"]["x"], y + c["t"]["y"]] for x, y in a] for a in c["anillos"]]}
-            for c in doc["capas"]]
+    """Capas con t de solo traslación (las de piezas_svg y piezas_curvas) en el mundo: puntos
+    o nodos; los tiradores de un nodo son relativos y no cambian."""
+    mover = lambda p, t: [p[0] + t["x"], p[1] + t["y"]]  # noqa: E731
+    return [{"op": c["op"], "anillos": [[{**n, "p": mover(n["p"], c["t"])} if isinstance(n, dict) else mover(n, c["t"])
+                                         for n in a] for a in c["anillos"]]} for c in doc["capas"]]
 
 
 def verificar(glb, fuente):
@@ -40,15 +44,49 @@ def verificar(glb, fuente):
 
 @pytest.mark.parametrize("nombre", SIMBOLOS)
 def test_ida_y_vuelta_sigue_aprobado(nombre, salida):
-    """Abrir un símbolo aprobado en el editor y generarlo sin tocar: el verificador lo aprueba."""
+    """Criterio de F4: abrir un símbolo aprobado (ya ajustado a curvas, como lo abre el
+    editor) y generarlo sin tocar: el verificador lo aprueba, con menos del 10 % de nodos.
+    fu-circular es la excepción documentada en el plan (sondeo 4.0): su aprobación está en
+    el último escalón de píxel del p95 y mover su borde 0,00005 ya lo rechaza; se exige
+    que su geometría quede a menos de 0,0003 de la original (error total del sondeo: 0,0002
+    del ajuste más pasar arcos a cúbicas y aplanar)."""
     fuente = RAIZ / "fuentes" / f"{nombre}.png"
     if not fuente.exists():  # shou-sello y xi-doble no se publican (marca de agua)
         pytest.skip(f"falta {fuente.name}")
-    doc = editor.piezas_svg(nombre)
+    denso, doc = editor.piezas_svg(nombre), editor.piezas_curvas(nombre)
+    nodos = lambda d: sum(len(a) for c in d["capas"] for a in c["anillos"])  # noqa: E731
+    assert nodos(doc) <= 0.10 * nodos(denso), (nodos(doc), nodos(denso))
     info = editor.generar(f"{nombre}-prueba", doc, en_mundo(doc))
     assert info["estanca"]
+    if nombre == "fu-circular":
+        bisel = doc["ajustes"]["bisel"]
+        g0, g1 = editor.geometria(en_mundo(denso), bisel), editor.geometria(en_mundo(doc), bisel)
+        assert shapely.hausdorff_distance(g0.boundary, g1.boundary, densify=0.05) < 0.0003
+        return
     codigo, r = verificar(salida / "glb" / f"{nombre}-prueba.glb", fuente)
     assert codigo == 0 and r["aprobado"], r
+
+
+def test_aplanar_es_la_misma_en_el_navegador():
+    """aplanar() de editor.html y la de tools/curvas.py dan los mismos puntos, bit a bit
+    (la del servidor manda; la del navegador es la de la vista)."""
+    import re
+    import curvas
+    fuente = re.search(r"function aplanar\(.*?\n}\n", (RAIZ / "editor.html").read_text(), re.S).group(0)
+    anillos = [a for c in editor.piezas_curvas("fu-trazo")["capas"] for a in c["anillos"]]
+    anillos.append([{"p": [0.5, 0], "ent": [0, -0.27], "sal": [0, 0.27]}, {"p": [0, 0.5], "ent": [0.27, 0], "sal": None},
+                    {"p": [-0.5, 0], "ent": None, "sal": None}])
+    js = fuente + f"console.log(JSON.stringify({json.dumps(anillos)}.map((a) => aplanar(a))));"
+    r = subprocess.run(["node", "-e", js], capture_output=True, text=True, check=True)
+    assert json.loads(r.stdout) == [curvas.aplanar(a) for a in anillos]
+
+
+def test_documento_version_1_da_la_misma_forma():
+    """migrar() convierte cada punto en un nodo vivo: el servidor aplana eso a los mismos
+    puntos, así que un documento de la versión 1 genera lo mismo que antes."""
+    for c in editor.piezas_svg("shou-cruz")["capas"]:
+        nodos = [[{"p": p, "ent": None, "sal": None, "tipo": "vivo"} for p in a] for a in c["anillos"]]
+        assert editor.forma_capa(nodos).equals_exact(editor.forma_capa(c["anillos"]), 0)
 
 
 def test_exportar_con_parametros_no_toca_los_globales(tmp_path):

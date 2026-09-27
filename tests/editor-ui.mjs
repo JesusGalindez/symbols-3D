@@ -1,7 +1,7 @@
 // Recorrido completo del editor en Chrome: mover, deshacer, escalar, rotar, dibujar,
 // restar, nodos, geometría exacta, guardado automático, generar y nombres protegidos.
 // Uso:  npm run test:ui     (código 1 si algo falla)
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { arrancar, abrirEditor, puntoEnCapa, comprobar, resumen } from './comun.mjs';
 
@@ -71,7 +71,7 @@ try {
   comprobar(await p.$$eval('#sobre .nodo', (l) => l.length) === 4, 'el rectángulo tiene 4 nodos');
   const n0 = await pantallaDe('#sobre .nodo');
   await arrastrar(n0, [-40, 40]);
-  const nodo = await p.evaluate(() => window.editor.doc().capas.find((c) => c.nombre === 'Rectángulo 1').anillos[0][0]);
+  const nodo = await p.evaluate(() => window.editor.doc().capas.find((c) => c.nombre === 'Rectángulo 1').anillos[0][0].p);
   comprobar(Math.abs(nodo[0] + 0.5) > 0.01, `arrastrar un nodo lo mueve (${nodo.map((v) => v.toFixed(3))})`);
   await p.keyboard.press('Escape');
 
@@ -243,7 +243,7 @@ try {
     const nodo = await s.$eval('#sobre .nodo', (n) => { const r = n.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
     const [dx, dy] = await cli(...destino);
     await s.mouse.move(...nodo); await s.mouse.down(); await s.mouse.move(dx + 3, dy - 2, { steps: 8 }); await s.mouse.up();
-    const fin = await s.evaluate((id) => { const c = window.editor.doc().capas.find((k) => k.id === id), [u, v] = c.anillos[0][0];
+    const fin = await s.evaluate((id) => { const c = window.editor.doc().capas.find((k) => k.id === id), [u, v] = c.anillos[0][0].p;
       const co = Math.cos(c.t.r), si = Math.sin(c.t.r); return [c.t.x + co * u * c.t.sx - si * v * c.t.sy, c.t.y + si * u * c.t.sx + co * v * c.t.sy]; }, rect.id);
     comprobar(Math.hypot(fin[0] - destino[0], fin[1] - destino[1]) < 1e-12, `el nodo engancha exacto a la esquina de otra capa (${fin.map((v) => v.toFixed(6))} = ${destino.map((v) => v.toFixed(6))})`);
     await s.keyboard.press('Escape'); await s.keyboard.press('Escape');
@@ -279,10 +279,11 @@ try {
     const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
     const docTxt = () => s.evaluate(() => JSON.stringify(window.editor.doc()));
     const sel = () => s.evaluate(() => window.editor.seleccion().length);
-    // puntos de cada capa en el mundo, y el centro de su caja
-    const mundo = () => s.evaluate(() => window.editor.doc().capas.map((c) => c.anillos.flatMap((r) => r.map(([u, v]) => {
-      const co = Math.cos(c.t.r), si = Math.sin(c.t.r);
-      return [c.t.x + co * u * c.t.sx - si * v * c.t.sy, c.t.y + si * u * c.t.sx + co * v * c.t.sy]; }))));
+    // puntos de cada capa en el mundo (el contorno aplanado, o solo sus nodos), y el centro de su caja
+    const mundo = (soloNodos = false) => s.evaluate((soloNodos) => window.editor.doc().capas.map((c) => c.anillos.flatMap((r) =>
+      (soloNodos ? r.map((n) => n.p) : window.editor.aplanar(r)).map(([u, v]) => {
+        const co = Math.cos(c.t.r), si = Math.sin(c.t.r);
+        return [c.t.x + co * u * c.t.sx - si * v * c.t.sy, c.t.y + si * u * c.t.sx + co * v * c.t.sy]; }))), soloNodos);
     const centrosX = async () => (await mundo()).map((P) => { const xs = P.map((q) => q[0]); return (Math.min(...xs) + Math.max(...xs)) / 2; });
     const asa = (q) => s.$eval(q, (n) => { const r = n.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
 
@@ -332,14 +333,14 @@ try {
     const an = Math.atan2(gy - ky, gx - kx) - Math.PI / 6, Lg = Math.hypot(gx - kx, gy - ky);
     await s.keyboard.down('Shift'); await s.mouse.move(gx, gy); await s.mouse.down();
     await s.mouse.move(kx + Lg * Math.cos(an), ky + Lg * Math.sin(an), { steps: 8 }); await s.mouse.up(); await s.keyboard.up('Shift');
-    const P0 = await mundo(), W0 = Number(await s.$eval('[data-q=w]', (i) => i.value));
+    const N0 = await mundo(true), P0 = await mundo(), W0 = Number(await s.$eval('[data-q=w]', (i) => i.value));
     const todos0 = P0.flat(), O = (Math.min(...todos0.map((q) => q[0])) + Math.max(...todos0.map((q) => q[0]))) / 2;
     await s.$eval('[data-q=w]', (i, v) => { i.value = v; i.dispatchEvent(new Event('change', { bubbles: true })); }, String(W0 * 1.5));
-    const P1 = await mundo();
+    const N1 = await mundo(true);  // los nodos: aplanar el contorno horneado no da los mismos puntos
     // W0 sale del panel con 3 decimales: la escala real es el ancho pedido entre el exacto
     const Wexacto = Math.max(...todos0.map((q) => q[0])) - Math.min(...todos0.map((q) => q[0])), kr = (W0 * 1.5) / Wexacto;
     let err = 0;
-    P0.forEach((P, i) => P.forEach((q, j) => { err = Math.max(err, Math.abs(P1[i][j][0] - (O + kr * (q[0] - O))), Math.abs(P1[i][j][1] - q[1])); }));
+    N0.forEach((P, i) => P.forEach((q, j) => { err = Math.max(err, Math.abs(N1[i][j][0] - (O + kr * (q[0] - O))), Math.abs(N1[i][j][1] - q[1])); }));
     const ts = await s.evaluate(() => window.editor.doc().capas.map((c) => c.t));
     comprobar(err < 1e-9 && ts.every((t) => t.r === 0 && t.sx === 1 && t.sy === 1),
       `ancho ×1,5 con capas giradas: se hornea en los nodos y cada punto va donde toca (error ${err.toExponential(1)})`);
@@ -361,6 +362,30 @@ try {
     comprobar((await s.evaluate(() => window.editor.doc().capas.length)) === 6 && await sel() === 3, '⌘D duplica las tres y deja seleccionadas las copias');
     await s.keyboard.press('Backspace');
     comprobar((await s.evaluate(() => window.editor.doc().capas.length)) === 3, 'Supr borra las tres copias');
+    await s.close();
+  }
+
+  // F4: un documento de la versión 1 (puntos sueltos) se abre como nodos vivos y da la misma
+  // forma; la elipse nueva es una curva de 4 nodos, no 128 puntos
+  {
+    writeFileSync(join(e.salida, 'editor', 'viejo.json'), JSON.stringify({ version: 1, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      capas: [{ id: 1, nombre: 'Cuadrado', op: 'unir', visible: true, anillos: [[[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]]], t: { x: 0, y: 0, r: 0, sx: 1, sy: 1 } }] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'viejo');
+    const d = await s.evaluate(() => window.editor.doc());
+    comprobar(d.version === 2 && d.capas[0].anillos[0].every((n) => n.tipo === 'vivo' && n.ent === null), 'un documento de la versión 1 se abre como nodos vivos (versión 2)');
+    const area = await s.evaluate(() => window.editor.resultado().reduce((t, poli) => t + poli.reduce((u, a, k) => {
+      let d = 0; for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; }
+      return u + (k ? -1 : 1) * Math.abs(d / 2); }, 0), 0));
+    comprobar(Math.abs(area - 0.16) < 0.001, `y el servidor saca la misma forma (área ${area.toFixed(4)}; 0,16 menos el redondeo de esquinas)`);
+    const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+    await s.keyboard.press('o');
+    const [a0, b0] = await cli(0.25, 0.25), [a1, b1] = await cli(0.45, 0.05);
+    await s.mouse.move(a0, b0); await s.mouse.down(); await s.mouse.move(a1, b1, { steps: 4 }); await s.mouse.up();
+    const el = await s.evaluate(() => window.editor.doc().capas.at(-1).anillos[0]);
+    comprobar(el.length === 4 && el.every((n) => n.ent && n.sal), 'la elipse nueva son 4 nodos con tiradores');
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    const r = await s.evaluate(() => window.editor.resultado().length);
+    comprobar(r === 2, `y el servidor la aplana: 2 piezas en la geometría exacta (${r})`);
     await s.close();
   }
 
@@ -387,7 +412,7 @@ try {
     await clicEnSugerencia(0.12, 0.079);   // tallo
     await clicEnSugerencia(0.444, 0.109);  // anillo
     const areas = await s.evaluate(() => window.editor.doc().capas.map((c) => {
-      let d = 0; const a = c.anillos[0];
+      let d = 0; const a = window.editor.aplanar(c.anillos[0]);
       for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; }
       return Math.abs(d / 2) * Math.abs(c.t.sx * c.t.sy);
     }));

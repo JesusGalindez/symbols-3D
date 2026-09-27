@@ -1,0 +1,319 @@
+"""Anillos densos (polilíneas) -> nodos Bézier, y vuelta. Sondeo 4.0 de docs/PLAN-EDITOR.md.
+
+Uso:  .venv/bin/python tools/curvas.py [--tol 0.0005] [--verificar]
+
+Cada anillo se parte en tramos de forma codiciosa: desde un nodo, el tramo más largo
+que ajusta dentro de la tolerancia con una recta, un arco (por los dos extremos) o una
+cúbica (Schneider: extremos fijos, tiradores por mínimos cuadrados con
+reparametrización de Newton). Los SVG ya traen las esquinas redondeadas en tramitos
+de 1e-5 (casi ningún vértice gira más de 30°), así que no se parte por esquinas: se
+empieza en el punto más afilado del anillo y el ajuste decide dónde cortar.
+
+Formato de nodo (el de 4.1): {"p": [x, y], "ent": [dx, dy] | None, "sal": [dx, dy] | None}
+con tiradores relativos a p; sin tirador, ese lado es recto.
+"""
+import argparse
+import math
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+K_ARCO = 4 / 3  # tirador de un arco de ángulo a: radio · 4/3 · tan(a/4)
+
+
+def cruz(u, v):  # producto vectorial 2D (np.cross ya no admite vectores de 2)
+    return u[..., 0] * v[..., 1] - u[..., 1] * v[..., 0]
+
+
+def _bezier(P, t):
+    t = t[:, None]
+    u = 1 - t
+    return u ** 3 * P[0] + 3 * u * u * t * P[1] + 3 * u * t * t * P[2] + t ** 3 * P[3]
+
+
+def _derivadas(P, t):
+    t = t[:, None]
+    u = 1 - t
+    d1 = 3 * (u * u * (P[1] - P[0]) + 2 * u * t * (P[2] - P[1]) + t * t * (P[3] - P[2]))
+    d2 = 6 * (u * (P[2] - 2 * P[1] + P[0]) + t * (P[3] - 2 * P[2] + P[1]))
+    return d1, d2
+
+
+def _cuerda(pts):
+    d = np.r_[0, np.cumsum(np.hypot(*np.diff(pts, axis=0).T))]
+    return d / d[-1] if d[-1] > 0 else d
+
+
+def ajustar_cubica(pts, tol):
+    """Cúbica con extremos fijos; None si no baja de tol."""
+    P0, P3 = pts[0], pts[-1]
+    t = _cuerda(pts)
+    for _ in range(6):
+        u = 1 - t
+        b1, b2 = 3 * u * u * t, 3 * u * t * t
+        resto = pts - (u ** 3)[:, None] * P0 - (t ** 3)[:, None] * P3
+        A = np.stack([b1, b2], 1)
+        try:
+            sol, *_ = np.linalg.lstsq(A, resto, rcond=None)
+        except np.linalg.LinAlgError:
+            return None
+        P = np.array([P0, sol[0], sol[1], P3])
+        # Newton: el parámetro de cada punto, el de su punto más cercano en la curva
+        c = _bezier(P, t)
+        d1, d2 = _derivadas(P, t)
+        num = ((c - pts) * d1).sum(1)
+        den = (d1 * d1).sum(1) + ((c - pts) * d2).sum(1)
+        t = np.clip(t - np.where(np.abs(den) > 1e-12, num / den, 0), 0, 1)
+        t[0], t[-1] = 0, 1
+    if np.hypot(*(_bezier(P, t) - pts).T).max() > tol or np.any(np.diff(t) < 0):
+        return None
+    # y en los dos sentidos: entre dos puntos seguidos la curva no se aleja de su segmento
+    # (con pocos puntos, una cúbica puede pasar por todos y hacer un bucle entre ellos)
+    for f in (0.25, 0.5, 0.75):
+        q = _bezier(P, t[:-1] + f * np.diff(t))
+        a, v = pts[:-1], np.diff(pts, axis=0)
+        L2 = (v * v).sum(1)
+        k = np.clip(np.where(L2 > 0, ((q - a) * v).sum(1) / np.where(L2 > 0, L2, 1), 0), 0, 1)
+        if np.hypot(*(q - a - k[:, None] * v).T).max() > tol:
+            return None
+    return P
+
+
+def ajustar_arco(pts, tol):
+    """Arco por los dos extremos (centro en su mediatriz, mínimos cuadrados). Devuelve
+    (centro, radio, barrido con signo) o None."""
+    a, b = pts[0], pts[-1]
+    m, v = (a + b) / 2, b - a
+    L = np.hypot(*v)
+    if L < 1e-9 or len(pts) < 4:
+        return None
+    n = np.array([-v[1], v[0]]) / L
+    # |p − (m + s n)|² = |a − (m + s n)|²  es lineal en s para cada punto
+    q, qa = pts - m, a - m
+    s_i_num = (q * q).sum(1) - (qa * qa).sum()
+    s_i_den = 2 * (q @ n - qa @ n)
+    ok = np.abs(s_i_den) > 1e-12
+    if ok.sum() < 2:
+        return None
+    s = (s_i_den[ok] * s_i_num[ok]).sum() / (s_i_den[ok] ** 2).sum()
+    c = m + s * n
+    r = np.hypot(*(a - c))
+    if r > 50:
+        return None
+    if np.abs(np.hypot(*(pts - c).T) - r).max() > tol:
+        return None
+    ang = np.unwrap(np.arctan2(pts[:, 1] - c[1], pts[:, 0] - c[0]))
+    d = np.diff(ang)
+    if not (np.all(d >= -1e-9) or np.all(d <= 1e-9)):  # los puntos avanzan en un sentido
+        return None
+    if (r * (1 - np.cos(d / 2))).max() > tol:  # entre dos puntos, el arco no se aleja de la cuerda
+        return None
+    return c, r, ang[-1] - ang[0]
+
+
+def arco_a_cubicas(c, r, a0, barrido):
+    n = max(1, math.ceil(abs(barrido) / (math.pi / 2) - 1e-9))
+    h = barrido / n
+    k = K_ARCO * math.tan(h / 4) * r
+    out = []
+    for i in range(n):
+        t0, t1 = a0 + i * h, a0 + (i + 1) * h
+        p0 = c + r * np.array([math.cos(t0), math.sin(t0)])
+        p1 = c + r * np.array([math.cos(t1), math.sin(t1)])
+        out.append(np.array([p0, p0 + k * np.array([-math.sin(t0), math.cos(t0)]),
+                             p1 - k * np.array([-math.sin(t1), math.cos(t1)]), p1]))
+    return out
+
+
+TOL_EXTREMO = 1e-9  # sobre la recta: un escalón de 1e-6 (el redondeo del SVG) ya inclina el borde
+
+
+def ajustar_tramo(pts, tol):
+    """Recta, arco o cúbica(s); None si nada ajusta. Cada tramo = lista de [P0..P3] o 'recta'."""
+    a, b = pts[0], pts[-1]
+    v = b - a
+    L = np.hypot(*v)
+    if L > 1e-12 and np.abs(cruz(v, pts - a)).max() / L <= tol:
+        # y sus extremos, sobre la prolongación de su segmento más largo: si no, la recta se
+        # alargaba hasta el redondeo de la esquina y un borde horizontal salía inclinado
+        # ~0,05° (el imán y alinear perdían la horizontal exacta; medido en shou-cruz)
+        seg = np.diff(pts, axis=0)
+        k = int(np.argmax(np.hypot(*seg.T)))
+        u = seg[k] / np.hypot(*seg[k])
+        if max(abs(cruz(u, a - pts[k])), abs(cruz(u, b - pts[k]))) <= TOL_EXTREMO:
+            return ("recta", None)
+    arco = ajustar_arco(pts, tol)
+    if arco:
+        c, r, barrido = arco
+        return ("arco", arco_a_cubicas(c, r, math.atan2(a[1] - c[1], a[0] - c[0]), barrido))
+    P = ajustar_cubica(pts, tol)
+    return ("cubica", [P]) if P is not None else None
+
+
+def _mas_afilado(r):
+    """Índice del punto que más gira en 0,01 de recorrido: ahí empieza el anillo."""
+    v = np.roll(r, -1, 0) - r
+    ang = np.arctan2(v[:, 1], v[:, 0])
+    giro = np.abs(np.angle(np.exp(1j * (ang - np.roll(ang, 1)))))
+    largo = np.hypot(*v.T)
+    paso = max(1, int(round(0.01 / max(np.median(largo), 1e-9))))
+    return int(np.argmax(np.convolve(np.r_[giro, giro[:paso]], np.ones(paso), "valid")[:len(r)] + 0)) + paso // 2
+
+
+def ajustar_anillo(anillo, tol=0.0005):
+    """Polilínea cerrada -> (nodos, tipos de tramo)."""
+    r = np.asarray(anillo, float)
+    i0 = _mas_afilado(r) % len(r)
+    r = np.roll(r, -i0, 0)
+    pts = np.vstack([r, r[:1]])  # cerrado: el último punto es el primero
+    n = len(pts)
+    tramos = []  # (i, j, tipo, cubicas)
+    i = 0
+    while i < n - 1:
+        # galope y luego búsqueda binaria del tramo más largo que ajusta. Tras un fallo se
+        # prueban aún dos tramos el doble de largos: con 3 o 4 puntos, una cúbica puede no
+        # ajustar y sí hacerlo con más (los escalones de 1e-5 del vectorizado)
+        bien, k, fallos, mal = (i + 1, ("recta", None)), 2, 0, None
+        while True:
+            j = min(i + k, n - 1)
+            f = ajustar_tramo(pts[i:j + 1], tol)
+            if f is None:
+                mal = mal if mal is not None and mal > bien[0] else j
+                fallos += 1
+            else:
+                bien, fallos, mal = (j, f), 0, None
+            if j == n - 1 or fallos > 2:
+                break
+            k *= 2
+        if mal is not None:
+            lo, hi = bien[0], mal
+            while hi - lo > 1:
+                mid = (lo + hi) // 2
+                f = ajustar_tramo(pts[i:mid + 1], tol)
+                if f is None:
+                    hi = mid
+                else:
+                    lo, bien = mid, (mid, f)
+        j, (tipo, cub) = bien
+        tramos.append((i, j, tipo, cub))
+        i = j
+    # a nodos: cada tramo recto no pone tiradores; las cúbicas, su sal y el ent del siguiente
+    nodos = []
+    for i, j, tipo, cub in tramos:
+        if tipo == "recta":
+            nodos.append({"p": pts[i].tolist(), "ent": None, "sal": None})
+            continue
+        for P in cub:
+            nodos.append({"p": P[0].tolist(), "ent": None, "sal": (P[1] - P[0]).tolist()})
+            nodos.append({"p": P[3].tolist(), "ent": (P[2] - P[3]).tolist(), "sal": None, "_fin": True})
+    # fundir el final de cada cúbica con el principio del tramo siguiente (mismo punto)
+    fundidos = []
+    for nd in nodos:
+        if fundidos and fundidos[-1].get("_fin") and np.allclose(fundidos[-1]["p"], nd["p"], atol=1e-12):
+            fundidos[-1] = {"p": fundidos[-1]["p"], "ent": fundidos[-1]["ent"], "sal": nd["sal"]}
+        else:
+            fundidos.append(nd)
+    if len(fundidos) > 1 and fundidos[-1].get("_fin"):  # el último cierra en el primero
+        fundidos[0]["ent"] = fundidos[-1]["ent"]
+        fundidos.pop()
+    for nd in fundidos:
+        nd.pop("_fin", None)
+    return fundidos, [t[2] for t in tramos]
+
+
+def aplanar(nodos, tol=0.0001):
+    """Nodos -> polilínea cerrada (sin repetir el primero). Cada cúbica se parte por la
+    mitad (De Casteljau) hasta que sus tiradores quedan a menos de tol de la cuerda.
+    En floats de Python y no numpy: aplanar() de editor.html es esta misma, operación por
+    operación, y las dos dan los mismos puntos (lo comprueba tests/test_editor.py)."""
+    out = []
+    n = len(nodos)
+    for k in range(n):
+        a, b = nodos[k], nodos[(k + 1) % n]
+        (x0, y0), (x3, y3) = a["p"], b["p"]
+        out.append([x0, y0])
+        if a["sal"] is None and b["ent"] is None:
+            continue
+        x1, y1 = (x0 + a["sal"][0], y0 + a["sal"][1]) if a["sal"] is not None else (x0, y0)
+        x2, y2 = (x3 + b["ent"][0], y3 + b["ent"][1]) if b["ent"] is not None else (x3, y3)
+        pila = [(x0, y0, x1, y1, x2, y2, x3, y3)]
+        while pila:
+            q = pila.pop()
+            ax, ay, bx, by, cx, cy, dx, dy = q
+            vx, vy = dx - ax, dy - ay
+            L = math.hypot(vx, vy)
+            if L > 1e-15:
+                plano = max(abs(vx * (by - ay) - vy * (bx - ax)), abs(vx * (cy - ay) - vy * (cx - ax))) / L
+            else:
+                plano = max(math.hypot(bx - ax, by - ay), math.hypot(cx - ax, cy - ay))
+            if plano <= tol:
+                out.append([dx, dy])
+                continue
+            abx, aby, bcx, bcy, cdx, cdy = (ax + bx) / 2, (ay + by) / 2, (bx + cx) / 2, (by + cy) / 2, (cx + dx) / 2, (cy + dy) / 2
+            ex, ey, fx, fy = (abx + bcx) / 2, (aby + bcy) / 2, (bcx + cdx) / 2, (bcy + cdy) / 2
+            mx, my = (ex + fx) / 2, (ey + fy) / 2
+            pila.append((mx, my, fx, fy, cdx, cdy, dx, dy))
+            pila.append((ax, ay, abx, aby, ex, ey, mx, my))
+        out.pop()  # el último trozo acaba en el nodo siguiente, que pone él mismo
+    return out
+
+
+def error_max(original, aplanado):
+    """Distancia de Hausdorff entre la polilínea original y la aplanada."""
+    import shapely
+    from shapely.geometry import LinearRing
+    return shapely.hausdorff_distance(LinearRing(original), LinearRing(aplanado), densify=0.05)
+
+
+def main():
+    sys.path.insert(0, str(Path(__file__).parent))
+    import editor
+    import simbolo as s
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tol", type=float, default=0.0005)
+    ap.add_argument("--verificar", action="store_true", help="generar aplanado a un temporal y pasar verificar.py")
+    a = ap.parse_args()
+    import json
+    import subprocess
+    import tempfile
+    print(f"tolerancia {a.tol} · nodos antes → después · error máx. · tramos recta/arco/cúbica · tiempo")
+    for nombre in ["amor", "fu-circular", "fu-hiragino", "fu-trazo", "shou-circular", "shou-cruz", "shou-sello", "xi-doble"]:
+        doc = editor.piezas_svg(nombre)
+        t0 = time.perf_counter()
+        antes = despues = 0
+        err = 0.0
+        tipos = {"recta": 0, "arco": 0, "cubica": 0}
+        capas = []
+        for c in doc["capas"]:
+            nuevos = []
+            for anillo in c["anillos"]:
+                nodos, ts = ajustar_anillo(anillo, a.tol)
+                antes += len(anillo)
+                despues += len(nodos)
+                for t in ts:
+                    tipos[t] += 1
+                plano = aplanar(nodos)
+                err = max(err, error_max(anillo, plano))
+                nuevos.append(plano)
+            capas.append({"op": c["op"], "anillos": [[[x + c["t"]["x"], y + c["t"]["y"]] for x, y in r] for r in nuevos]})
+        dt = time.perf_counter() - t0
+        linea = (f"{nombre:14} {antes:5} → {despues:4} ({despues / antes:5.1%})  error {err:.5f}  "
+                 f"{tipos['recta']:3}/{tipos['arco']:3}/{tipos['cubica']:3}  {dt:5.2f} s")
+        if a.verificar:
+            fuente = Path(s.RAIZ) / "fuentes" / f"{nombre}.png"
+            if fuente.exists():
+                with tempfile.TemporaryDirectory() as tmp:
+                    editor.SALIDA = Path(tmp)
+                    editor.generar(f"{nombre}-curvas", doc, capas)
+                    r = subprocess.run([sys.executable, str(Path(__file__).parent / "verificar.py"),
+                                        str(Path(tmp) / "glb" / f"{nombre}-curvas.glb"), str(fuente)],
+                                       capture_output=True, text=True)
+                    v = json.loads(r.stdout.strip().splitlines()[-1])
+                    linea += f"  {'APROBADO' if v['aprobado'] else 'RECHAZADO'}"
+        print(linea, flush=True)
+
+
+if __name__ == "__main__":
+    main()

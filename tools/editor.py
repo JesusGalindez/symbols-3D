@@ -27,6 +27,7 @@ from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 from shapely.ops import polygonize, unary_union
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import curvas  # noqa: E402
 import simbolo as s  # noqa: E402
 
 NOMBRE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -36,6 +37,7 @@ AJUSTES = {"fondo": s.FONDO, "bisel": s.BISEL, "color": s.COLOR}
 # vértices difieren ~1e-17: la unión dejaba una grieta de ancho cero y el redondeo en
 # planta se comía la franja junto a ella (shou-cruz cortado: 5e-3 de área perdida).
 PRECISION = 1e-9
+TOL_CURVAS = 0.0002  # ajuste al importar: sondeo 4.0 de docs/PLAN-EDITOR.md
 COPIAS = 20          # copias por documento en editor/.historial
 CADA_COPIA = 30      # segundos mínimos entre copias: el navegador guarda 1,5 s tras cada cambio
 SALIDA = s.RAIZ      # --salida la cambia: glb/, svg/ y editor/ se escriben ahí
@@ -69,6 +71,34 @@ def piezas_svg(nombre):
     return {"version": 1, "origen": nombre, "capas": capas, "ajustes": AJUSTES}
 
 
+def tipo_nodo(n):
+    """vivo: esquina; suave: tiradores alineados; espejo: además, del mismo largo."""
+    e, o = n["ent"], n["sal"]
+    if e is None or o is None:
+        return "vivo"
+    le, lo = math.hypot(*e), math.hypot(*o)
+    if le < 1e-12 or lo < 1e-12 or (e[0] * o[0] + e[1] * o[1]) / (le * lo) > -math.cos(math.radians(2)):
+        return "vivo"
+    return "espejo" if abs(le - lo) <= 0.02 * max(le, lo) else "suave"
+
+
+_curvas = {}  # nombre -> (fecha del svg, documento): ajustar shou-circular cuesta ~2 s
+
+
+def piezas_curvas(nombre):
+    """piezas_svg() con cada anillo denso ajustado a rectas, arcos y cúbicas (versión 2)."""
+    fecha = (s.RAIZ / "svg" / f"{nombre}.svg").stat().st_mtime
+    if _curvas.get(nombre, (None,))[0] != fecha:
+        doc = piezas_svg(nombre)
+        r = lambda v: None if v is None else [round(v[0], 9), round(v[1], 9)]  # noqa: E731
+        for c in doc["capas"]:
+            c["anillos"] = [[{"p": r(n["p"]), "ent": r(n["ent"]), "sal": r(n["sal"]), "tipo": tipo_nodo(n)}
+                             for n in curvas.ajustar_anillo(a, TOL_CURVAS)[0]] for a in c["anillos"]]
+        doc["version"] = 2
+        _curvas[nombre] = (fecha, doc)
+    return json.loads(json.dumps(_curvas[nombre][1]))  # copia: quien la recibe puede cambiarla
+
+
 def anillo_valido(a):
     """Un anillo tal cual lo dejó el usuario. make_valid y no buffer(0): con un contorno
     que se cruza (pajarita), buffer(0) tira media forma; make_valid conserva las dos,
@@ -78,9 +108,12 @@ def anillo_valido(a):
 
 
 def forma_capa(anillos):
-    """Los anillos de una capa, en el mundo, combinados como el relleno evenodd del lienzo."""
+    """Los anillos de una capa, en el mundo, combinados como el relleno evenodd del lienzo.
+    Un anillo es una lista de puntos o (versión 2) de nodos Bézier, que se aplanan aquí."""
     forma = Polygon()
     for a in anillos:
+        if a and isinstance(a[0], dict):
+            a = curvas.aplanar(a)
         if len(a) >= 3:
             forma = forma.symmetric_difference(anillo_valido(a))
     return forma
@@ -388,7 +421,7 @@ class Manejador(SimpleHTTPRequestHandler):
                 libre, n = f"{nombre}-editado", 2  # sin pisar una edición anterior del mismo símbolo
                 while (docs() / f"{libre}.json").exists() or protegido(libre):
                     libre, n = f"{nombre}-editado-{n}", n + 1
-                return self.responder({"nombre": libre, "doc": piezas_svg(nombre)})
+                return self.responder({"nombre": libre, "doc": piezas_curvas(nombre)})
             return self.responder({"error": f"no existe {nombre}"}, 404)
         return super().do_GET()
 

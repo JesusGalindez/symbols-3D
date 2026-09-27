@@ -361,6 +361,53 @@ cúbica (Schneider); tolerancia 0,0005 (0,05 % del diámetro, por debajo del con
 p95 del verificador). Se miden: nodos antes y después, error máximo, tiempo. **Con esos
 números se fija el criterio de 4.2**; hasta entonces no hay objetivo de nodos.
 
+**Sondeo hecho el 2026-09-26** (`.venv/bin/python tools/curvas.py --verificar [--tol X]`):
+- **No hay esquinas que partir:** los SVG traen las esquinas ya redondeadas en tramitos
+  de 1e-5; casi ningún vértice gira más de 30°. El ajuste es codicioso: desde el punto
+  más afilado del anillo, el tramo más largo que ajusta con recta, arco (por sus dos
+  extremos) o cúbica. Recta y arco van antes porque dan nodos exactos y editables.
+- **La comprobación va en los dos sentidos:** con pocos puntos, una cúbica pasa por todos
+  y hace un bucle entre ellos, y un arco por los extremos de un borde recto largo se
+  abomba (error de 3 diámetros en la primera medida). Ahora se mide también la curva
+  entre puntos seguidos.
+
+| tol | nodos (de 25.906) | por símbolo | error máx. | verificador |
+|---|---|---|---|---|
+| 0,0005 | 1.035 | 2,6–7,3 % | 0,00078 | 7 de 8 |
+| 0,0002 | 1.192 | 2,8–8,0 % | 0,00035 | 7 de 8 |
+| 0,0001 | 1.256 | 3,1–8,2 % | 0,00016 | 7 de 8 |
+
+Tiempo: 0,7–2,5 s por símbolo; `shou-circular`, 5–6 s.
+
+**fu-circular no pasa con ninguna tolerancia, y no es por las curvas.** El verificador
+mide en píxeles enteros (transformada de distancia a 1200 px): el p95 del contorno solo
+puede valer √20 px = 0,373 % o √25 px = 0,417 %, y el umbral es 0,38 %. El fu-circular
+aprobado está en 0,373, el último escalón. Sin curvas, desplazar su borde 0,00005 hacia
+fuera (0,06 px) ya lo rechaza, y 0,0001 lo aprueba. Las curvas lo mueven 0,00013 como
+mucho.
+
+**Decidido (usuario):** fu-circular queda como excepción documentada: el criterio exige
+que su geometría quede a menos de 0,0003 de la original (el error total medido), no
+APROBADO. El verificador no se toca.
+
+**4.1 y 4.2 hechos el 2026-09-26.** Tolerancia fijada: **0,0002**; objetivo: **≤ 10 % de
+los nodos** por símbolo (medido: 3,1–9,1 %, de 25.906 a 1.414 en total). Sobre el sondeo:
+- **Una recta tiene que acabar sobre la prolongación exacta de su segmento más largo**
+  (< 1e-9). Con solo la tolerancia de las curvas, se alargaba hasta el redondeo de la
+  esquina y el borde horizontal de la barra de shou-cruz salía inclinado ~0,05°: el imán
+  de la cuchilla dejaba de encontrarlo (lo cazó `test:ui`).
+- **El galope sigue dos duplicaciones tras un fallo:** con esa recta estricta, en los
+  escalones de 1e-5 del vectorizado ni recta ni arco ni cúbica ajustan con 3 puntos, y
+  sí con más; parándose en el primer fallo, los nodos subían al 11–43 %.
+- El navegador envía los nodos en el mundo (`nodosMundo`: p movido, tiradores girados y
+  escalados) y el servidor aplana en `forma_capa` (regla 2). El lienzo dibuja las curvas
+  con `C` de SVG; `aplanar()` del navegador, para la caja y el 3D provisional, es la de
+  Python operación por operación (`test_aplanar_es_la_misma_en_el_navegador`, bit a bit).
+- Abrir un símbolo ajusta en 0,9–2,6 s; se cachea en el servidor por fecha del SVG.
+- Aún con polígonos (hasta 4.3): las piezas de un corte vuelven como nodos vivos densos,
+  y «Simplificar nodos» solo quita nodos sin curva a los lados. La elipse nueva ya son 4
+  nodos con tiradores.
+
 **4.1 Modelo.** Cada anillo pasa a ser una lista de nodos
 `{p:[x,y], ent:[dx,dy]|null, sal:[dx,dy]|null, tipo:"vivo"|"suave"|"espejo"}`
 (tiradores relativos, en coordenadas locales). Una sola función `aplanar(anillo, tol)`
