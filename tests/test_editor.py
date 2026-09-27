@@ -854,3 +854,32 @@ def test_lapiz_de_300_puntos_llega_con_pocos_nodos():
     linea = LineString(editor.curvas.aplanar(nodos, cerrado=False))
     assert len(nodos) <= 30 and max(linea.distance(Point(p)) for p in pts) < 0.002
     assert nodos[0]["p"] == list(pts[0]) and math.dist(nodos[-1]["p"], pts[-1]) < 1e-12
+
+
+# ---------- G8: texto
+FUENTE_PRUEBA = next((f for f in ["/System/Library/Fonts/Hiragino Sans GB.ttc", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+                      if Path(f).exists()), None)
+
+
+@pytest.mark.skipif(FUENTE_PRUEBA is None, reason="sin Hiragino ni DejaVu")
+def test_texto_llega_con_los_nodos_exactos_de_la_fuente():
+    """Criterio de G8: el texto sale de los glifos como nodos (cuadráticas pasadas a cúbicas
+    sin pérdida): aplanado muy fino coincide con letras.py a 256 pasos por curva (IoU ≥
+    0,99999). Frente a letras.py tal cual (16 pasos por curva, lo que aproxima él) el IoU
+    se queda en ~0,9998. Y nunca hay más nodos que puntos tiene el glifo."""
+    import letras
+    from fontTools.ttLib import TTFont
+    texto = "福" if "Hiragino" in FUENTE_PRUEBA else "AMOR"
+    fuente = TTFont(FUENTE_PRUEBA, fontNumber=2 if FUENTE_PRUEBA.endswith(".ttc") else 0)
+    capas = editor.texto_a_capas(texto, FUENTE_PRUEBA, 2 if FUENTE_PRUEBA.endswith(".ttc") else 0)
+    fino = unary_union([editor.forma_capa([editor.curvas.aplanar(a, 1e-7) for a in c["anillos"]]) if c["op"] == "unir" else Polygon()
+                        for c in capas])
+    letras.PASOS_CURVA = 256
+    try:
+        ref = unary_union(letras.componer(texto, fuente, 0.02))
+    finally:
+        letras.PASOS_CURVA = 16
+    assert iou(fino, ref) >= 0.99999
+    gs, cmap = fuente.getGlyphSet(), fuente.getBestCmap()
+    puntos = sum(len(fuente["glyf"][cmap[ord(ch)]].getCoordinates(fuente["glyf"])[0]) for ch in texto) if "glyf" in fuente else math.inf
+    assert sum(len(a) for c in capas for a in c["anillos"]) <= puntos

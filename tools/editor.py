@@ -105,6 +105,90 @@ def piezas_curvas(nombre):
     return json.loads(json.dumps(_curvas[nombre][1]))  # copia: quien la recibe puede cambiarla
 
 
+# ---------- texto (G8)
+CARPETAS_FUENTES = [Path("/System/Library/Fonts"), Path("/Library/Fonts"), Path.home() / "Library/Fonts",
+                    Path("/usr/share/fonts"), Path.home() / ".fonts", Path.home() / ".local/share/fonts"]
+_fuentes = None
+
+
+def fuentes():
+    """Las fuentes del sistema (.ttf, .otf, .ttc): [{"ruta", "nombre"}], por nombre."""
+    global _fuentes
+    if _fuentes is None:
+        rutas = sorted({p for c in CARPETAS_FUENTES if c.is_dir() for p in c.rglob("*") if p.suffix.lower() in (".ttf", ".otf", ".ttc")})
+        _fuentes = sorted(({"ruta": str(p), "nombre": p.stem} for p in rutas), key=lambda f: f["nombre"].lower())
+    return _fuentes
+
+
+class PlumaNodos:
+    """Pen de fonttools -> anillos de nodos con las curvas tal cual: las cuadráticas de
+    TrueType pasan a cúbicas de forma exacta (BasePen._qCurveToOne) y los componentes se
+    descomponen."""
+    def __new__(cls, glyphset):
+        from fontTools.pens.basePen import BasePen
+
+        class _Pluma(BasePen):
+            def __init__(self, gs):
+                super().__init__(gs)
+                self.anillos, self.actual = [], None
+
+            def _moveTo(self, p):
+                self.actual = [{"p": list(p), "ent": None, "sal": None}]
+
+            def _lineTo(self, p):
+                self.actual.append({"p": list(p), "ent": None, "sal": None})
+
+            def _curveToOne(self, c1, c2, p):
+                u = self.actual[-1]
+                u["sal"] = [c1[0] - u["p"][0], c1[1] - u["p"][1]]
+                self.actual.append({"p": list(p), "ent": [c2[0] - p[0], c2[1] - p[1]], "sal": None})
+
+            def _closePath(self):
+                a = self.actual
+                if a and len(a) > 1 and math.dist(a[-1]["p"], a[0]["p"]) < 1e-9:
+                    a[0]["ent"] = a.pop()["ent"]
+                if a and len(a) >= 2:
+                    self.anillos.append(a)
+                self.actual = None
+
+            _endPath = _closePath
+        return _Pluma(glyphset)
+
+
+def texto_a_capas(texto, ruta, indice=0, espacio=0.02):
+    """Texto con una fuente -> capas con los contornos de sus glifos como nodos (1 = un
+    em, centrado en el origen). Cada letra, una capa; con la regla de relleno nonzero de
+    las fuentes (leer_svg.repartir), por si un glifo tiene contornos que se solapan."""
+    from fontTools.ttLib import TTFont
+    fuente = TTFont(ruta, fontNumber=int(indice))
+    cmap, hmtx, gs = fuente.getBestCmap(), fuente["hmtx"], fuente.getGlyphSet()
+    em = fuente["head"].unitsPerEm
+    x, capas = 0.0, []
+    for ch in texto:
+        glifo = cmap.get(ord(ch))
+        if glifo is None:
+            raise ValueError(f"la fuente no tiene «{ch}»")
+        pluma = PlumaNodos(gs)
+        gs[glifo].draw(pluma)
+        mover = lambda n, dx=x: {"p": [(n["p"][0] + dx) / em, n["p"][1] / em],  # noqa: E731
+                                 "ent": n["ent"] and [n["ent"][0] / em, n["ent"][1] / em],
+                                 "sal": n["sal"] and [n["sal"][0] / em, n["sal"][1] / em]}
+        anillos = [[mover(n) for n in a] for a in pluma.anillos]
+        if anillos:
+            partes = leer_svg.repartir(anillos, "nonzero", 1.0)
+            for j, (op, an) in enumerate(partes):
+                capas.append({"nombre": ch if len(partes) == 1 else f"{ch} · {j + 1}", "op": op, "anillos": an})
+        x += hmtx[glifo][0] + espacio * em
+    if not capas:
+        raise ValueError("el texto no tiene ningún trazo")
+    pts = [q for c in capas for a in c["anillos"] for q in curvas.aplanar(a)]
+    cx = (min(q[0] for q in pts) + max(q[0] for q in pts)) / 2
+    cy = (min(q[1] for q in pts) + max(q[1] for q in pts)) / 2
+    for c in capas:
+        c["anillos"] = [[{**n, "p": [n["p"][0] - cx, n["p"][1] - cy], "tipo": tipo_nodo(n)} for n in a] for a in c["anillos"]]
+    return capas
+
+
 def importar(nombre, texto):
     """Un SVG externo -> documento nuevo (versión 2): una capa por elemento relleno, con sus
     curvas (tools/leer_svg.py), escalado a diámetro 1. El nombre sale del del archivo, sin
@@ -768,7 +852,7 @@ def previa(doc, capas):
 # al guardar.
 CAMPOS = {
     "doc": {"version", "origen", "capas", "ajustes", "simetria", "guias", "grupos"},
-    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto", "grupo"},
+    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto", "grupo", "forma"},
     "grupo": {"id", "nombre", "op", "booleana", "visible", "abierto", "bloqueada", "grupo"},
     "nodo": {"p", "ent", "sal", "tipo", "radio"},
 }
@@ -842,6 +926,8 @@ class Manejador(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         url = urlparse(self.path)
+        if url.path == "/api/fuentes":
+            return self.responder({"fuentes": fuentes()})
         if url.path == "/api/simbolos":
             editados = sorted(p.stem for p in docs().glob("*.json"))
             svgs = sorted(p.stem for p in (s.RAIZ / "svg").glob("*.svg")
@@ -906,6 +992,11 @@ class Manejador(SimpleHTTPRequestHandler):
                     return self.responder({"capas": desplazar(datos["capas"], float(datos["d"]))})
                 return self.responder(engrosar_lo_necesario(datos["capas"], float(datos["bisel"]), datos.get("simetria"),
                                                             grupos=datos.get("grupos")))
+            except Exception as e:
+                return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
+        if self.path == "/api/texto":
+            try:
+                return self.responder({"capas": texto_a_capas(str(datos["texto"]), datos["fuente"], datos.get("indice", 0))})
             except Exception as e:
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
         if self.path == "/api/lapiz":  # G7: la polilínea a mano alzada -> nodos con curvas

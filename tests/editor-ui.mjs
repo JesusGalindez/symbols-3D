@@ -984,6 +984,68 @@ try {
     await s.close();
   }
 
+  // G8: estrella y polígono paramétricos, arco de elipse, línea, flecha y texto
+  {
+    mkdirSync(join(e.salida, 'editor'), { recursive: true });
+    writeFileSync(join(e.salida, 'editor', 'formas.json'), JSON.stringify({ version: 3, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] }, capas: [] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'formas');
+    const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+    const ultima = () => s.evaluate(() => window.editor.doc().capas.at(-1));
+    const dibujar = async (h, a, b, shift = false) => {
+      await s.click(`[data-herr="${h}"]`);
+      const [x0, y0] = await cli(...a), [x1, y1] = await cli(...b);
+      if (shift) await s.keyboard.down('Shift');
+      await s.mouse.move(x0, y0); await s.mouse.down(); await s.mouse.move(x1, y1, { steps: 4 }); await s.mouse.up();
+      if (shift) await s.keyboard.up('Shift');
+    };
+    const campo = (k, v) => s.$eval(`[data-forma=${k}]`, (i, v) => { i.value = v; i.dispatchEvent(new Event('change', { bubbles: true })); }, v);
+    const areaMundo = () => s.evaluate(() => { const c = window.editor.doc().capas.at(-1); let t = 0;
+      for (const a of c.anillos) { const q = window.editor.aplanar(window.editor.redondear(a), 1e-9); let d = 0;
+        for (let i = 0; i < q.length; i++) { const p = q[i], r = q[(i + 1) % q.length]; d += p[0] * r[1] - r[0] * p[1]; } t += (t ? -1 : 1) * Math.abs(d / 2); }
+      return Math.abs(t * c.t.sx * c.t.sy); });  // evenodd: el primer anillo menos los huecos
+    // estrella de 5 puntas, radios 0,4 y 0,16 (caja 0,8 × 0,8 e interior 0,4): N·R·r·sen(π/N)
+    await dibujar('estrella', [-0.4, 0.4], [0.4, -0.4]);
+    await campo('interior', '0.4');
+    const est = await ultima();
+    comprobar(est.forma?.tipo === 'estrella' && est.anillos[0].length === 10, 'la estrella es paramétrica: 10 nodos');
+    const aE = await areaMundo(), aEx = 5 * 0.4 * 0.16 * Math.sin(Math.PI / 5);
+    comprobar(Math.abs(aE - aEx) < 1e-9, `estrella de radios 0,4 y 0,16: área exacta (${aE.toFixed(9)} = ${aEx.toFixed(9)})`);
+    await s.keyboard.press('Delete');
+    // polígono: lados en el panel
+    await dibujar('poligono', [-0.3, 0.3], [0.3, -0.3]);
+    await campo('lados', '8');
+    comprobar((await ultima()).anillos[0].length === 8, 'el panel cambia los lados del polígono');
+    await s.keyboard.press('Enter');
+    comprobar(!(await ultima()).forma, 'abrir sus nodos lo convierte en vector');
+    await s.keyboard.press('Escape'); await s.keyboard.press('Delete');
+    // elipse: arco de 360° con interior 50 % = el anillo (en cúbicas de 90°: ~3e-4 relativo)
+    await dibujar('elipse', [-0.4, 0.4], [0.4, -0.4]);
+    await campo('interior', '50');
+    const el = await ultima(), aA = await areaMundo(), aAx = Math.PI * (0.16 - 0.04);
+    comprobar(el.anillos.length === 2 && Math.abs(aA - aAx) / aAx < 4e-4, `elipse con interior 50 %: el anillo (área ${aA.toFixed(5)} ≈ ${aAx.toFixed(5)})`);
+    await campo('barrido', '90');
+    comprobar((await ultima()).anillos.length === 1 && (await ultima()).anillos[0].length === 4, 'con barrido de 90°: un cuarto de anillo (4 nodos)');
+    await s.keyboard.press('Escape');
+    // línea y flecha
+    await dibujar('linea', [-0.4, -0.5], [0.4, -0.45], true);
+    const lin = await ultima();
+    comprobar(lin.abierto && lin.trazo && Math.abs(lin.anillos[0][0].p[1] - lin.anillos[0][1].p[1]) < 1e-12, 'la línea con ⇧ sale horizontal, abierta y con trazo');
+    await dibujar('flecha', [-0.4, 0.55], [0.4, 0.55]);
+    comprobar(await s.evaluate(() => { const g = window.editor.doc().grupos?.at(-1); return g && g.nombre.startsWith('Flecha') && window.editor.doc().capas.filter((c) => c.grupo === g.id).length === 2; }),
+      'la flecha es un grupo: línea y punta');
+    // texto
+    await s.keyboard.press('Escape'); await s.keyboard.press('t');
+    await s.mouse.click(...await cli(0, 0.7));
+    await s.waitForFunction(() => !document.querySelector('#cajaTexto').hidden && document.querySelectorAll('#fuenteTexto option').length > 0, { timeout: 10000 });
+    await s.type('#textoNuevo', 'Hi'); await s.keyboard.press('Enter');
+    await s.waitForFunction(() => window.editor.doc().grupos?.some((g) => g.nombre === 'Texto «Hi»'), { timeout: 10000 });
+    const letrasT = await s.evaluate(() => window.editor.doc().capas.filter((c) => ['H', 'i'].includes(c.nombre)).map((c) => c.anillos.flat().length));
+    comprobar(letrasT.length === 2 && letrasT.every((n) => n >= 4), `el texto llega en contornos, una capa por letra (${letrasT.join(' y ')} nodos)`);
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    comprobar(/exacta/.test(await s.$eval('#etiqueta2d', (x) => x.textContent)), 'y el servidor da la geometría exacta de todo');
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {

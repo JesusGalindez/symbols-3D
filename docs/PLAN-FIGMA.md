@@ -599,6 +599,24 @@ abierto), darle grosor y generar. Hecho si: APROBADO.
 cúbicas); «福» con Hiragino da la misma planta que `letras.py` (IoU ≥ 0,9999), con
 tantos nodos como puntos tiene el glifo.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). Sobre lo previsto:
+- **Criterio del texto:** los nodos de los glifos son exactos (cuadráticas a cúbicas sin
+  pérdida, con `BasePen` de fonttools): aplanados muy fino coinciden con `letras.py` a
+  256 pasos por curva con IoU 0,9999993. Frente a `letras.py` tal cual el IoU es ~0,9998,
+  porque el que aproxima es él (16 pasos por curva). En la nube se prueba con DejaVu
+  Sans Bold (no hay Hiragino); en un Mac, con Hiragino. Relleno nonzero, como las fuentes
+  (`leer_svg.repartir`).
+- **Arco de elipse:** en cúbicas de ≤ 90° (como Figma), el anillo de 360° con interior
+  50 % tiene ~3e-4 de área relativa de más (la cúbica abomba); el «< 1e-6» del plan no
+  es alcanzable sin más segmentos. La prueba pide < 4e-4 relativo.
+- Polígono, estrella y elipse guardan sus parámetros en `forma`; abrir sus nodos los
+  convierte en vector (como Figma) y un radio de esquina se conserva al cambiar lados.
+- La flecha es un grupo (G5) de su línea y su punta (triángulo de 4 × 3 grosores).
+- Fuentes: las de las carpetas del sistema (`/api/fuentes`); el texto llega a 0,2 de
+  alto de em donde se pulsó, y con varias letras, en un grupo.
+Medido: pytest 76, `test:ui` 171 en verde; estrella de radios 0,4 y 0,16 con el área
+exacta (error < 1e-9).
+
 **Tarea de usuario (5 min):** hacer un sello: anillo con arco, «福» en texto dentro,
 restar el texto del disco y generar. Hecho si: APROBADO.
 
