@@ -88,16 +88,19 @@ A layer editor in the browser, Figma-style, with a live 3D preview. It opens any
 
 On macOS, double-clicking `editor.command` does the same.
 
-- **Layers.** Each layer is a closed shape with its own position, rotation and scale. Layers combine bottom to top: *unir* (add) or *restar* (subtract whatever is below). Drag them in the list to reorder.
-- **Tools.** Move (V), rectangle (R), ellipse (O), pen (P) for curves, and knife (K), which cuts a symbol into separate strokes: the blue lines are suggested cuts at the stroke joints. Enter or a double click edits the nodes and handles of a layer.
-- **Precision.** Smart guides snap moving layers, nodes and knife lines to edges, corners, centers and the axes; live left-right or top-bottom symmetry mirrors one half; several layers can be selected, aligned and distributed.
-- **SVG in and out.** *Open → Import SVG…* brings in an outside logo (from Figma, Illustrator, Inkscape…) with its curves: paths, rectangles, circles, ellipses and polygons, with transforms, class styles and both fill rules; each filled shape becomes a layer, scaled to diameter 1. Strokes are ignored, so convert them to outlines first. *SVG* exports the design with its curves, without the rounded finish (that one belongs to the GLB).
+- **Layers and groups.** Each layer is a shape with its own position, rotation and scale. Layers combine bottom to top: add, subtract, intersect or exclude whatever is below. Group them (⌘G), make boolean groups that stay editable (⌥⇧U, S, I, E), flatten them (⌘E), lock, hide and reorder them by dragging, in and out of groups. A group can become a component (⌥⌘K) whose instances follow it.
+- **Tools.** Move (V), rectangle (R), ellipse (O, with arcs and inner radius), polygon, star, line (L), arrow (⇧L), text (T, straight to outlines from any system font), pen (P), pencil (⇧P) and knife (K), which cuts a symbol into separate strokes: the blue lines are suggested cuts at the stroke joints. Enter or a double click edits the nodes: several at once (marquee or lasso), corner radius, bend a segment with ⌘, join (⌘J) and merge (⇧⌘M).
+- **Strokes.** Draw a stroke's skeleton and give it a width, caps and joins, like in Figma; outline it (⇧⌘O) to edit it by hand. When "Generate" rejects a stroke as too thin, "Thicken as needed" finds the smallest offset that passes.
+- **Precision.** Smart guides snap moving layers, nodes and knife lines to edges, corners, centers, the axes and your own guides (⇧R shows the rulers); hold ⌥ to measure distances; number fields accept math (`0.2*3`, `+0.01`, `50%`). Live left-right, top-bottom or rotational symmetry (order 2 to 12, optionally mirrored), and "repeat around the center".
+- **Clipboard.** Copy, cut and paste layers (as SVG, so they paste into Figma too), paste in place (⇧⌘V), and paste an SVG copied from Figma. ⌥ + drag duplicates, ⌘D repeats the last offset, ⇧H / ⇧V flip.
+- **SVG in and out.** *Open → Import SVG…* brings in an outside logo (from Figma, Illustrator, Inkscape…) with its curves: paths, rectangles, circles, ellipses, polygons and lines, with transforms, class styles, both fill rules and strokes (as stroke layers); scaled to diameter 1. *Export* (⇧⌘E) writes the design or the selection as SVG with its curves, or a PNG at 1×, 2× or 4×, without the rounded finish (that one belongs to the GLB).
+- **History.** Every document keeps its last 20 copies plus named versions (⌥⌘S); *History* shows them with thumbnails, compares one over the canvas and restores it (undoable).
 - **Exact geometry.** The browser only draws a preview, labeled as such. The shape that counts is combined by the server with shapely, and "Generate GLB" checks it before shipping: watertight mesh, exact normals, and no stroke so thin that the rounding eats it. If a check fails, only the detailed model is written, so you can inspect it.
 - **Safe by default.** Documents are saved automatically to `editor/<name>.json`, with the last 20 copies in `editor/.historial/`. Undo and redo (⌘Z, ⇧⌘Z) also bring back the selection. A GLB that did not come from the editor is never overwritten.
 
-Press **?** in the editor for every shortcut. ⇧1 fits the visible shapes (or the selection) to the canvas; ⇧0 goes back to 100 %. The design notes, phase by phase, are in [docs/PLAN-EDITOR.md](docs/PLAN-EDITOR.md).
+Press **?** in the editor for every shortcut. ⇧1 fits the visible shapes (or the selection) to the canvas; ⇧0 goes back to 100 %. The design notes, phase by phase, are in [docs/PLAN-EDITOR.md](docs/PLAN-EDITOR.md) and [docs/PLAN-FIGMA.md](docs/PLAN-FIGMA.md).
 
-Tests: `.venv/bin/pytest tests/` (server) and `npm run test:ui` (full walk-through in Chrome; set `CHROME` to the browser binary outside macOS).
+Tests: `.venv/bin/pytest tests/` (server), `npm run test:ui` (full walk-through in Chrome; set `CHROME` to the browser binary outside macOS) and `npm run test:rendimiento` (frame budget). GitHub Actions runs the first two on every push.
 
 ### Viewer
 

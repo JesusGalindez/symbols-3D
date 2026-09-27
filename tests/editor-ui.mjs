@@ -1118,6 +1118,66 @@ try {
     await s.close();
   }
 
+  // G10: componente e instancias (crear, voltear la instancia, cambiar el maestro, separar)
+  {
+    const cuadro = (id, nombre, [x, y, w, h], op = 'unir') => ({ id, nombre, op, visible: true, t: { x, y, r: 0, sx: 1, sy: 1 },
+      anillos: [[[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map((p) => ({ p, ent: null, sal: null, tipo: 'vivo' }))] });
+    mkdirSync(join(e.salida, 'editor'), { recursive: true });
+    writeFileSync(join(e.salida, 'editor', 'componentes.json'), JSON.stringify({ version: 3, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      capas: [cuadro(1, 'Gancho', [-0.3, 0.2, 0.2, 0.1]), cuadro(2, 'Agujero', [-0.3, 0.2, 0.05, 0.05], 'restar')] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'componentes');
+    await s.click('#capas li[data-id="1"] .nom'); await s.keyboard.down('Shift'); await s.click('#capas li[data-id="2"] .nom'); await s.keyboard.up('Shift');
+    await s.keyboard.down('Meta'); await s.keyboard.down('Alt'); await s.keyboard.press('KeyK'); await s.keyboard.up('Alt'); await s.keyboard.up('Meta');
+    const maestro = await s.evaluate(() => window.editor.doc().grupos?.find((g) => g.componente));
+    comprobar(!!maestro, '⌥⌘K hace un componente de las dos capas');
+    await s.click('[data-gr-accion="instancia"]');
+    // la relación: cada nodo de una copia = m · (nodo del maestro − centro del maestro)
+    const relacion = () => s.evaluate((mid) => {
+      const d = window.editor.doc(), mun = (c) => c.anillos[0].map((n) => { const co = Math.cos(c.t.r), si = Math.sin(c.t.r), [u, v] = n.p;
+        return [c.t.x + co * u * c.t.sx - si * v * c.t.sy, c.t.y + si * u * c.t.sx + co * v * c.t.sy]; });
+      const ms = d.capas.filter((c) => c.grupo === mid), ps = ms.flatMap(mun), xs = ps.map((q) => q[0]), ys = ps.map((q) => q[1]);
+      const C = [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+      let err = 0, n = 0;
+      for (const I of d.grupos.filter((g) => g.instancia === mid)) {
+        const hs = d.capas.filter((c) => c.grupo === I.id), [a, b, c, dd, e, f] = I.m;
+        ms.forEach((m, k) => mun(m).forEach((q, j) => { const p = [q[0] - C[0], q[1] - C[1]], r = mun(hs[k])[j];
+          err = Math.max(err, Math.hypot(a * p[0] + c * p[1] + e - r[0], b * p[0] + dd * p[1] + f - r[1])); n++; }));
+      }
+      return { err, n, instancias: d.grupos.filter((g) => g.instancia === mid).length };
+    }, maestro.id);
+    let r = await relacion();
+    comprobar(r.instancias === 1 && r.n === 8 && r.err < 1e-12, `«Crear instancia»: sus copias son el maestro llevado por su matriz (error ${r.err.toExponential(1)})`);
+    await s.keyboard.down('Shift'); await s.keyboard.press('h'); await s.keyboard.up('Shift');
+    const mI = await s.evaluate((mid) => window.editor.doc().grupos.find((g) => g.instancia === mid).m, maestro.id);
+    r = await relacion();
+    comprobar(mI[0] * mI[3] - mI[1] * mI[2] < 0 && r.err < 1e-9, `voltear la instancia cambia su matriz (determinante < 0) y sigue al maestro (error ${r.err.toExponential(1)})`);
+    // mover un nodo del maestro mueve el mismo nodo en la instancia
+    await s.keyboard.press('Escape'); await s.keyboard.press('Escape');
+    await s.keyboard.down('Meta'); await s.mouse.click(...await puntoEnCapa(s, 1)); await s.keyboard.up('Meta');
+    await s.keyboard.press('Enter');
+    await s.mouse.click(...await s.$eval('#sobre .nodo[data-nodo="0,1"]', (x) => { const b = x.getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2]; }));
+    for (let i = 0; i < 3; i++) await s.keyboard.press('ArrowUp');
+    r = await relacion();
+    comprobar(r.err < 1e-9, `mover un nodo del maestro lo mueve en la instancia (error ${r.err.toExponential(1)})`);
+    await s.keyboard.press('Escape'); await s.keyboard.press('Escape');
+    // separar no cambia la forma; y con instancias se genera APROBADO
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    const area = () => s.evaluate(() => window.editor.resultado().reduce((t, poli) => t + poli.reduce((u, a, k) => {
+      let d = 0; for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; }
+      return u + (k ? -1 : 1) * Math.abs(d / 2); }, 0), 0));
+    const a0 = await area();
+    await s.$eval('#nombre', (x) => { x.value = 'con-instancias'; });
+    await s.click('#bGenerar');
+    await s.waitForFunction(() => !/Generando/.test(document.querySelector('#estado').textContent), { timeout: 120000 });
+    comprobar(/APROBADO/.test(await s.$eval('#estado', (x) => x.textContent)), 'un documento con instancias se genera APROBADO');
+    const iid = await s.evaluate((mid) => window.editor.doc().grupos.find((g) => g.instancia === mid).id, maestro.id);
+    await s.click(`#capas li[data-id="${iid}"] .nom`);
+    await s.click('[data-gr-accion="separar"]');
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    comprobar(!(await s.evaluate(() => window.editor.doc().capas.some((c) => c.copia))) && Math.abs(await area() - a0) < 1e-12, 'separar la instancia no cambia la forma');
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {

@@ -221,6 +221,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
   <h4>Grupos</h4><dl><dt>⌘G · ⇧⌘G</dt><dd>Agrupar · desagrupar</dd><dt>⌥⇧U · S · I · E</dt><dd>Grupo booleano (no destructivo)</dd>
     <dt>Clic · doble clic</dt><dd>Elige el grupo · entra en él</dd><dt>⌘ + clic</dt><dd>La capa, aunque esté en un grupo</dd><dt>Esc</dt><dd>Al grupo de arriba</dd>
     <dt>Arrastrar en la lista</dt><dd>Dentro o fuera de un grupo</dd></dl>
+  <h4>Componentes</h4><dl><dt>⌥⌘K</dt><dd>Hacer componente (❖); en su panel, «Crear instancia» (◇)</dd><dt>⌘D en una instancia</dt><dd>Otra instancia</dd></dl>
   <h4>Capas</h4><dl><dt>⇧⌘L</dt><dd>Bloquear (no se elige en el lienzo)</dd><dt>⇧⌘H</dt><dd>Mostrar u ocultar</dd>
     <dt>⌘R</dt><dd>Renombrar</dd><dt>Tab · ⇧Tab</dt><dd>La capa de encima · la de debajo</dd></dl>
   <h4>Nodos</h4><dl><dt>Doble clic en el borde</dt><dd>Añadir un nodo</dd><dt>Doble clic en un nodo</dt><dd>Esquina ↔ curva</dd>
@@ -351,6 +352,7 @@ function nodosForma(f) {
 }
 const FORMAS = { poligono: { tipo: 'poligono', lados: 5 }, estrella: { tipo: 'estrella', puntas: 5, interior: 0.382 }, elipse: { tipo: 'elipse', inicio: 0, barrido: 360, interior: 0 } };
 function abrirNodos(c) {  // abrir los nodos de una forma paramétrica la convierte en vector
+  if (c?.copia) { nodos = false; return estado('Es parte de una instancia: su forma se edita en el componente (o sepárala)', true); }
   if (c?.forma) { delete c.forma; estado('La forma pasa a ser un vector: sus parámetros ya no cuentan'); commit(); }
 }
 // la polilínea de la capa, cacheada por su lista de anillos (quien cambia nodos pone una nueva)
@@ -416,6 +418,81 @@ function elegible(c, profundo) {
   const cadena = [...ancestros(c).reverse(), c];  // de la raíz a la capa
   const k = entrado == null ? -1 : cadena.findIndex((x) => x.id === entrado);
   return cadena[k + 1].id;
+}
+// Componentes e instancias (G10). El maestro es un grupo con «componente»; una instancia,
+// un grupo con «instancia» (el id del maestro) y «m», la afín del mundo que lleva el
+// contenido del maestro (respecto al centro de sus nodos) a su sitio. Sus capas son copias
+// («copia»), hechas aquí a partir del maestro en cada cambio: el servidor las ve como capas
+// normales. Mover, girar o voltear una instancia mueve sus copias; de ellas se saca «m» otra
+// vez (mínimos cuadrados) y se rehacen todas
+function centroMaestro(id) {
+  const ps = hojas(id).flatMap((c) => nodosMundo(c).flat().map((n) => n.p));
+  if (!ps.length) return [0, 0];
+  const xs = ps.map((q) => q[0]), ys = ps.map((q) => q[1]);
+  return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+}
+function ajusteAfin(P, Q) {  // la afín [a b c d e f] que mejor lleva los puntos P a los Q
+  const S = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], bx = [0, 0, 0], by = [0, 0, 0];
+  for (let i = 0; i < P.length; i++) {
+    const v = [P[i][0], P[i][1], 1];
+    for (let r = 0; r < 3; r++) { for (let k = 0; k < 3; k++) S[r][k] += v[r] * v[k]; bx[r] += v[r] * Q[i][0]; by[r] += v[r] * Q[i][1]; }
+  }
+  const resolver = (b) => {  // Cramer 3 × 3
+    const det = (M) => M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+    const D = det(S); if (Math.abs(D) < 1e-18) return null;
+    return [0, 1, 2].map((j) => det(S.map((fila, r) => fila.map((v, k) => (k === j ? b[r] : v)))) / D);
+  };
+  const X = resolver(bx), Y = resolver(by);
+  return X && Y ? [X[0], Y[0], X[1], Y[1], X[2], Y[2]] : null;
+}
+function sincronizarInstancias() {
+  for (const I of doc.grupos?.filter((g) => g.instancia != null) ?? []) {
+    const M0 = grupoDe(I.instancia);
+    if (!M0) { delete I.instancia; delete I.m; for (const c of hojas(I.id)) delete c.copia; continue; }  // sin maestro: grupo normal
+    const maestras = hojas(M0.id), C = centroMaestro(M0.id), hijas = doc.capas.filter((c) => c.grupo === I.id);
+    const rel = (c) => nodosMundo(c).map((a) => a.map((n) => ({ ...n, p: [n.p[0] - C[0], n.p[1] - C[1]] })));
+    // ¿se movió la instancia? (sus copias no están donde las pone m): m sale de ellas
+    if (hijas.length === maestras.length && hijas.length) {
+      const P = maestras.flatMap((c) => rel(c).flat().map((n) => n.p)), Q = hijas.flatMap((c) => nodosMundo(c).flat().map((n) => n.p));
+      if (P.length === Q.length) {
+        const fuera = P.some((p, i) => Math.hypot(aplicar(I.m, p)[0] - Q[i][0], aplicar(I.m, p)[1] - Q[i][1]) > 1e-9);
+        if (fuera) I.m = ajusteAfin(P, Q) ?? I.m;
+      }
+    }
+    const [a, b, cc, d] = I.m, L = (v) => v && [a * v[0] + cc * v[1], b * v[0] + d * v[1]];
+    const nuevas = maestras.map((c, i) => {
+      const h = { id: hijas[i]?.id ?? idSig++, nombre: c.nombre, op: c.op, visible: c.visible, grupo: I.id, copia: true,
+        ...(c.trazo ? { trazo: { ...c.trazo } } : {}), ...(c.abierto ? { abierto: true } : {}) };
+      ponerMundo(h, rel(c).map((r) => r.map((n) => ({ ...n, p: aplicar(I.m, n.p), ent: L(n.ent), sal: L(n.sal), tipo: n.tipo ?? 'vivo' }))));
+      return h;
+    });
+    const primera = doc.capas.findIndex((c) => c.grupo === I.id);
+    const resto = doc.capas.filter((c) => c.grupo !== I.id);
+    resto.splice(primera >= 0 ? primera : resto.length, 0, ...nuevas);
+    doc.capas = resto;
+  }
+}
+function hacerComponente() {  // ⌥⌘K: lo elegido pasa a ser un componente (un grupo maestro)
+  if (!selec.length) return;
+  if (!(grupoSel() && !grupoSel().instancia)) agrupar();
+  const g = grupoSel();
+  g.componente = true; g.nombre = g.nombre.startsWith('Grupo') ? `Componente ${doc.grupos.filter((x) => x.componente).length}` : g.nombre;
+  commit(); estado(`«${esc(g.nombre)}» es un componente: «Crear instancia» en el panel`);
+}
+function crearInstancia(maestro) {
+  const C = centroMaestro(maestro.id), n = doc.grupos.filter((g) => g.instancia === maestro.id).length + 1;
+  const I = { id: idSig++, nombre: `${maestro.nombre} · instancia ${n}`, op: 'unir', instancia: maestro.id, m: [1, 0, 0, 1, C[0] + 0.1 * n, C[1] - 0.1 * n] };
+  doc.grupos.push(I);
+  // un sitio en la pila (encima de todo) para sus copias: sincronizarInstancias las hace
+  const semilla = { id: idSig++, nombre: '·', op: 'unir', visible: true, grupo: I.id, copia: true, anillos: [[nodo([0, 0]), nodo([1e-3, 0]), nodo([0, 1e-3])]], t: { x: 0, y: 0, r: 0, sx: 1, sy: 1 } };
+  doc.capas.push(semilla);
+  selec = [I.id]; entrado = null; commit();
+}
+function separarInstancia(I) {
+  delete I.instancia; delete I.m;
+  for (const c of hojas(I.id)) delete c.copia;
+  I.nombre = I.nombre.replace(' · instancia', ' · separada');
+  commit(); estado('Instancia separada: ya es un grupo normal');
 }
 // los miembros de cada grupo, seguidos en la pila y en el orden de su hoja más baja (el
 // mismo que usa el servidor, arbol()); los grupos vacíos se van
@@ -909,7 +986,7 @@ function capasUI() {  // en árbol: los grupos con sangría, de arriba abajo
       ${g ? `<button class="pliegue" data-accion="pliegue" title="Plegar o desplegar">${x.abierto === false ? '▸' : '▾'}</button>` : ''}
       <button class="ojo" data-accion="ojo" title="Mostrar u ocultar">${visible ? '◉' : '○'}</button>
       <span class="op" title="${OPS[x.op ?? 'unir'][1]}">${OPS[x.op ?? 'unir'][0]}</span>
-      <span class="nom">${g ? (x.booleana ? `<b title="Grupo booleano: ${OPS[x.booleana][1]}">${OPS[x.booleana][0]}</b> ` : '▣ ') : ''}${esc(x.nombre)}</span>
+      <span class="nom">${g ? (x.componente ? '<b title="Componente">❖</b> ' : x.instancia != null ? '<b title="Instancia">◇</b> ' : x.booleana ? `<b title="Grupo booleano: ${OPS[x.booleana][1]}">${OPS[x.booleana][0]}</b> ` : '▣ ') : ''}${esc(x.nombre)}</span>
       <button class="candado" data-accion="candado" title="Bloquear (⇧⌘L)">${bloq ? '🔒' : '🔓'}</button></li>`;
     if (g && x.abierto !== false) visitar(x.id, prof + 1);
   };
@@ -964,7 +1041,12 @@ function panel() {
       <label class="ancho">Operación (con lo de debajo)<select data-gr="op">${Object.keys(OPS).map((o) => `<option value="${o}" ${g.op === o ? 'selected' : ''}>${OPS[o][0]} ${OPS[o][1]}</option>`).join('')}</select></label>
       <label class="ancho">Booleana (entre sus capas)<select data-gr="booleana"><option value="">Ninguna: grupo normal</option>
         ${Object.keys(OPS).map((o) => `<option value="${o}" ${g.booleana === o ? 'selected' : ''}>${OPS[o][0]} ${{ unir: 'Unir', restar: 'Restar a la de abajo', intersecar: 'Intersecar', excluir: 'Excluir' }[o]}</option>`).join('')}</select></label></div>
-      <div class="fila"><button data-gr-accion="desagrupar" title="⇧⌘G">Desagrupar</button><button data-aplanar="1" title="⌘E">Aplanar</button></div>`;
+      <div class="fila"><button data-gr-accion="desagrupar" title="⇧⌘G">Desagrupar</button><button data-aplanar="1" title="⌘E">Aplanar</button></div>
+      ${g.componente ? `<div class="fila"><button data-gr-accion="instancia" title="Una copia que sigue al componente">Crear instancia</button></div>
+        <p class="nota">Componente: sus instancias cambian con él (${doc.grupos.filter((x) => x.instancia === g.id).length}).</p>` : ''}
+      ${g.instancia != null ? `<div class="fila"><button data-gr-accion="separar" title="Deja de seguir al componente">Separar instancia</button></div>
+        <p class="nota">Instancia de «${esc(grupoDe(g.instancia)?.nombre ?? '?')}»: se mueve, gira, escala y voltea; su forma, en el componente.</p>` : ''}
+      ${!g.componente && g.instancia == null ? `<div class="fila"><button data-gr-accion="componente" title="⌥⌘K">Hacer componente</button></div>` : ''}`;
     const B = cajaGrupo(capasSel()), n = g ? hojas(g.id).length : selec.length, ok = B[0] <= B[2];
     const bot = (k, txt, t) => `<button data-alinear="${k}" title="${t}">${txt}</button>`;
     html += `<h3>Selección · ${n} capas</h3><div class="rejilla">
@@ -1080,6 +1162,9 @@ $('#props').addEventListener('click', (e) => {
   if (e.target.id === 'bCosturas') { delete capaSel().costuras; commit(); }
   if (e.target.dataset.booleana) booleanaSel(e.target.dataset.booleana);
   if (e.target.dataset.grAccion === 'desagrupar') desagrupar();
+  if (e.target.dataset.grAccion === 'componente') hacerComponente();
+  if (e.target.dataset.grAccion === 'instancia') crearInstancia(grupoSel());
+  if (e.target.dataset.grAccion === 'separar') separarInstancia(grupoSel());
   if (e.target.dataset.aplanar) aplanarSel();
   if (e.target.dataset.repetir) repetirCirculo(Math.round(evaluar($('#nRepetir').value, 6)));
   const a = e.target.dataset.trAccion, cs = capasSel();
@@ -1165,6 +1250,7 @@ function renombrar() {
 
 // ---------- historia
 function commit() {
+  sincronizarInstancias();
   normalizar();
   const s = JSON.stringify(doc);
   if (historia[puntero] !== s) {
@@ -1837,6 +1923,7 @@ addEventListener('keydown', (e) => {
   if (mod && k === 'z') { e.preventDefault(); irA(puntero + (e.shiftKey ? 1 : -1)); return; }
   if (mod && k === 'd') { e.preventDefault(); duplicar(); return; }
   if (mod && e.altKey && e.code === 'KeyS') { e.preventDefault(); guardarVersion(); return; }
+  if (mod && e.altKey && e.code === 'KeyK') { e.preventDefault(); hacerComponente(); return; }
   if (mod && e.shiftKey && k === 'e') { e.preventDefault(); $('#exportar').hidden = false; return; }
   if (mod && k === 's') { e.preventDefault(); guardar(); return; }
   if (mod && k === 'a') {
@@ -2046,7 +2133,7 @@ async function terminarCorte() {
   if (linea.length < 2) { todo(); return; }
   // como la cuchilla de Illustrator: corta todo lo visible que cruza, haya selección o no
   // (limitarla a la selección hacía que el segundo corte, tras seleccionar una pieza, no hiciera nada)
-  const objetivo = doc.capas.filter((c) => c.visible);
+  const objetivo = doc.capas.filter((c) => c.visible && !c.copia);  // las copias de una instancia las rehace su componente
   const r = await api('/api/cortar', { linea, capas: objetivo.map((c) => ({ ...capaMundo(c),
     costuras: (c.costuras ?? []).map((l) => l.map((q) => aMundo(c.t, q))) })) });
   if (r.error) { todo(); return estado(`El corte falló: ${r.error}`, true); }

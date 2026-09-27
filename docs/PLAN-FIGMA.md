@@ -643,8 +643,8 @@ documento de la versión 3 pasa por la migración.
   pedir al servidor la forma exacta de 20 copias): basta para reconocerlas.
 - El botón «SVG» pasa a «Exportar» (⇧⌘E): SVG del diseño o de la selección (el del
   servidor, con curvas) y PNG de ese SVG a 1×, 2× y 4× (1× = una milésima del diámetro
-  por píxel). Arreglado de paso: desde G2, el SVG exportado desde el editor no llevaba
-  los trazos (el navegador mandaba las capas sin `trazo`).
+  por píxel). (El SVG exportado desde el editor no llevaba los trazos entre G2 y G5: el
+  navegador mandaba las capas sin `trazo`; lo arregló G5 al pasar a `capaMundo()`.)
 Medido: pytest 77, `test:ui` 177 en verde.
 
 **Tarea de usuario (3 min):** estropear un documento, encontrar en el historial la
@@ -668,6 +668,23 @@ edita el maestro y cambian todas las copias. Con la simetría en vivo (F2) y la 
 **Criterio automático:** mover un nodo del maestro mueve el mismo nodo del mundo en
 cada instancia según su `t` (< 1e-12); separar una instancia no cambia la planta; un
 documento con instancias exporta SVG y genera GLB igual que su versión expandida.
+
+**Hecho el 2026-09-27** (falta la tarea de usuario). **Cambio sobre lo previsto:** las
+instancias no las expande el servidor, sino el editor: una instancia es un grupo con
+`instancia` (el id del maestro) y `m` (la afín del mundo que lleva el contenido del
+maestro, respecto al centro de sus nodos, a su sitio), y sus capas son copias (`copia`)
+rehechas en cada cambio (`sincronizarInstancias()`). Así el servidor las ve como capas
+normales y combinar, generar, exportar y la cuchilla no cambian. Además:
+- Mover, girar, escalar o voltear una instancia mueve sus copias con el código de
+  siempre; de ellas se saca `m` otra vez por mínimos cuadrados (con error 0 en las
+  pruebas) y se rehacen todas. Sus nodos no se editan, ni la cuchilla las corta.
+- El centro del maestro es el de la caja de sus nodos: cambiar su forma lo puede mover, y
+  la instancia lo sigue (como las instancias de Figma, ancladas a su marco).
+- Los grupos que haya dentro del maestro se aplanan en la instancia (sus capas con su
+  operación, sin los grupos booleanos): un componente con grupos booleanos dentro se ve
+  distinto en sus instancias.
+- Borrar el maestro deja sus instancias como grupos normales.
+Medido: pytest 82, `test:ui` 186 en verde; las copias siguen al maestro con error 0.
 
 **Tarea de usuario (5 min):** en `shou-cruz`, convertir un gancho en componente,
 sustituir los otros tres por instancias giradas y cambiar la forma del maestro. Hecho

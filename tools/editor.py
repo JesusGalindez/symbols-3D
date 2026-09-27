@@ -879,8 +879,8 @@ def previa(doc, capas):
 # al guardar.
 CAMPOS = {
     "doc": {"version", "origen", "capas", "ajustes", "simetria", "guias", "grupos"},
-    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto", "grupo", "forma"},
-    "grupo": {"id", "nombre", "op", "booleana", "visible", "abierto", "bloqueada", "grupo"},
+    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto", "grupo", "forma", "copia"},
+    "grupo": {"id", "nombre", "op", "booleana", "visible", "abierto", "bloqueada", "grupo", "componente", "instancia", "m"},
     "nodo": {"p", "ent", "sal", "tipo", "radio"},
 }
 
