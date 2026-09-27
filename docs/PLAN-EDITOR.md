@@ -330,6 +330,22 @@ deja los tres centros en el mismo X con error < 1e-9.
 **Tarea de usuario (3 min):** cortar `shou-cruz` en trazos (F1), seleccionar los
 cuatro ganchos y alinearlos simétricamente con la ayuda del imán.
 
+**Hecho el 2026-09-26**, solo en `editor.html` (el servidor no cambia). Sobre lo previsto:
+- **Al hornear, t queda en solo traslación** con el origen en el centro de la caja de la
+  capa, no en identidad: como las piezas de la cuchilla, así X e Y del panel siguen
+  diciendo dónde está. Mientras se arrastra, la matriz con cizalla espera fuera del
+  documento (`pendiente`) y el 3D provisional la usa tal cual; se hornea al soltar.
+- **Caja de la selección = caja real de los nodos en el mundo** (alinear, distribuir,
+  panel). El imán al mover sigue con la caja de la caja local girada, igual que con una
+  capa; para capas sin girar son la misma.
+- Como Figma: pulsar una de varias las arrastra todas y soltar sin arrastrar deja solo
+  esa; ⇧ + clic (lienzo o lista) suma o quita; ⌘D, Supr y las flechas actúan sobre todas.
+- Panel: X e Y son el centro de la caja; ancho y alto escalan desde el centro.
+
+Medido: criterio del plan en `npm run test:ui` (deshacer → JSON idéntico; centros
+alineados con diferencia 0; ancho ×1,5 con capas giradas → error 2e-16 por punto).
+Recuadro sobre `shou-circular` (5159 nodos): 0,6 ms por movimiento (mediana).
+
 ---
 
 ## F4 · Curvas Bézier  (3 sesiones, empieza por un sondeo)

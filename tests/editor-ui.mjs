@@ -271,6 +271,99 @@ try {
     await s.close();
   }
 
+  // F3: selección múltiple. Criterio del plan: 3 capas con recuadro, girar 30°, escalar con
+  // ⇧ y deshacer vuelve al JSON anterior idéntico; alinear al centro deja los tres centros
+  // en el mismo X (< 1e-9). Y escalar sin proporción capas giradas hornea la cizalla.
+  {
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'xi-doble');
+    const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+    const docTxt = () => s.evaluate(() => JSON.stringify(window.editor.doc()));
+    const sel = () => s.evaluate(() => window.editor.seleccion().length);
+    // puntos de cada capa en el mundo, y el centro de su caja
+    const mundo = () => s.evaluate(() => window.editor.doc().capas.map((c) => c.anillos.flatMap((r) => r.map(([u, v]) => {
+      const co = Math.cos(c.t.r), si = Math.sin(c.t.r);
+      return [c.t.x + co * u * c.t.sx - si * v * c.t.sy, c.t.y + si * u * c.t.sx + co * v * c.t.sy]; }))));
+    const centrosX = async () => (await mundo()).map((P) => { const xs = P.map((q) => q[0]); return (Math.min(...xs) + Math.max(...xs)) / 2; });
+    const asa = (q) => s.$eval(q, (n) => { const r = n.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+
+    await s.keyboard.press('r');  // un rectángulo bajo el símbolo: tres capas
+    const [r0x, r0y] = await cli(-0.3, -0.6), [r1x, r1y] = await cli(0.1, -0.7);
+    await s.mouse.move(r0x, r0y); await s.mouse.down(); await s.mouse.move(r1x, r1y, { steps: 4 }); await s.mouse.up();
+    const [a0x, a0y] = await cli(-0.62, 0.62), [a1x, a1y] = await cli(0.62, -0.78);
+    await s.mouse.move(a0x, a0y); await s.mouse.down(); await s.mouse.move(a1x, a1y, { steps: 6 }); await s.mouse.up();
+    comprobar(await sel() === 3, `el recuadro selecciona las 3 capas (${await sel()})`);
+    comprobar(await s.$$eval('#contornos path', (l) => l.length) === 3 && await s.$$eval('#sobre .asa', (l) => l.length) === 5,
+      'se ven sus 3 contornos y una caja común con 4 esquinas y el asa de giro');
+
+    const antes = await docTxt(), r0 = await s.evaluate(() => window.editor.doc().capas.map((c) => c.t.r));
+    // girar 30° con ⇧ (múltiplos de 15°): en pantalla, y hacia abajo, es -30°
+    const [hx, hy] = await asa('#sobre .asa.rot');
+    const [cx, cy] = await s.$eval('#sobre polygon.caja', (n) => { const r = n.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    const ang = Math.atan2(hy - cy, hx - cx) - Math.PI / 6, L = Math.hypot(hx - cx, hy - cy);
+    await s.keyboard.down('Shift');
+    await s.mouse.move(hx, hy); await s.mouse.down();
+    await s.mouse.move(cx + L * Math.cos(ang), cy + L * Math.sin(ang), { steps: 8 }); await s.mouse.up();
+    await s.keyboard.up('Shift');
+    const giros = await s.evaluate((r0) => window.editor.doc().capas.map((c, i) => c.t.r - r0[i]), r0);
+    comprobar(giros.every((g) => Math.abs(g - Math.PI / 6) < 1e-12), `girar con ⇧ gira las tres 30° exactos (${giros.map((g) => (g * 180 / Math.PI).toFixed(6)).join(', ')})`);
+
+    const s0 = await s.evaluate(() => window.editor.doc().capas.map((c) => [c.t.sx, c.t.sy]));
+    const [ex, ey] = await asa('#sobre .asa[data-asa="2"]');
+    await s.keyboard.down('Shift');
+    await s.mouse.move(ex, ey); await s.mouse.down(); await s.mouse.move(ex + 40, ey - 15, { steps: 6 }); await s.mouse.up();
+    await s.keyboard.up('Shift');
+    const ks = await s.evaluate((s0) => window.editor.doc().capas.flatMap((c, i) => [c.t.sx / s0[i][0], c.t.sy / s0[i][1]]), s0);
+    comprobar(ks[0] > 1.05 && ks.every((k) => Math.abs(k - ks[0]) < 1e-12), `escalar con ⇧ escala las tres por igual, sin hornear (×${ks[0].toFixed(4)})`);
+    await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.press('z'); await s.keyboard.up('Meta');
+    comprobar(await docTxt() === antes, 'deshacer dos veces vuelve al JSON anterior idéntico');
+
+    await s.click('[data-alinear="centro"]');
+    const xs = await centrosX(), dx = Math.max(...xs) - Math.min(...xs);
+    comprobar(dx < 1e-9, `alinear al centro deja los tres centros en el mismo X (diferencia ${dx.toExponential(1)})`);
+    await s.click('[data-alinear="izq"]');
+    const izq = (await mundo()).map((P) => Math.min(...P.map((q) => q[0])));
+    comprobar(Math.max(...izq) - Math.min(...izq) < 1e-9, 'alinear a la izquierda iguala los bordes izquierdos');
+
+    // girar 30° (rehecho a mano) y fijar el ancho de la selección ×1,5 en el panel: las capas
+    // giradas no caben en (x, y, r, sx, sy), se hornean, y cada punto va a O + 1,5·(p − O) en X
+    await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.press('z'); await s.keyboard.up('Meta');
+    const [gx, gy] = await asa('#sobre .asa.rot');
+    const [kx, ky] = await s.$eval('#sobre polygon.caja', (n) => { const r = n.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    const an = Math.atan2(gy - ky, gx - kx) - Math.PI / 6, Lg = Math.hypot(gx - kx, gy - ky);
+    await s.keyboard.down('Shift'); await s.mouse.move(gx, gy); await s.mouse.down();
+    await s.mouse.move(kx + Lg * Math.cos(an), ky + Lg * Math.sin(an), { steps: 8 }); await s.mouse.up(); await s.keyboard.up('Shift');
+    const P0 = await mundo(), W0 = Number(await s.$eval('[data-q=w]', (i) => i.value));
+    const todos0 = P0.flat(), O = (Math.min(...todos0.map((q) => q[0])) + Math.max(...todos0.map((q) => q[0]))) / 2;
+    await s.$eval('[data-q=w]', (i, v) => { i.value = v; i.dispatchEvent(new Event('change', { bubbles: true })); }, String(W0 * 1.5));
+    const P1 = await mundo();
+    // W0 sale del panel con 3 decimales: la escala real es el ancho pedido entre el exacto
+    const Wexacto = Math.max(...todos0.map((q) => q[0])) - Math.min(...todos0.map((q) => q[0])), kr = (W0 * 1.5) / Wexacto;
+    let err = 0;
+    P0.forEach((P, i) => P.forEach((q, j) => { err = Math.max(err, Math.abs(P1[i][j][0] - (O + kr * (q[0] - O))), Math.abs(P1[i][j][1] - q[1])); }));
+    const ts = await s.evaluate(() => window.editor.doc().capas.map((c) => c.t));
+    comprobar(err < 1e-9 && ts.every((t) => t.r === 0 && t.sx === 1 && t.sy === 1),
+      `ancho ×1,5 con capas giradas: se hornea en los nodos y cada punto va donde toca (error ${err.toExponential(1)})`);
+    // y lo mismo arrastrando una esquina sin ⇧: hornea al soltar y la geometría exacta llega
+    await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.up('Meta');
+    const [qx, qy] = await asa('#sobre .asa[data-asa="2"]');
+    await s.mouse.move(qx, qy); await s.mouse.down(); await s.mouse.move(qx + 60, qy - 5, { steps: 6 }); await s.mouse.up();
+    const ts2 = await s.evaluate(() => window.editor.doc().capas.map((c) => c.t));
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    comprobar(ts2.every((t) => t.r === 0 && t.sx === 1) && /exacta/.test(await s.$eval('#etiqueta2d', (x) => x.textContent)),
+      'arrastrar una esquina sin ⇧ también hornea y la geometría exacta llega');
+
+    // ⇧ + clic en la lista quita una; ⌘A las vuelve a coger todas; ⌘D duplica las tres
+    await s.keyboard.down('Shift'); await s.click('#capas li:first-child .nom'); await s.keyboard.up('Shift');
+    comprobar(await sel() === 2, '⇧ + clic en la lista quita una de la selección');
+    await s.keyboard.down('Meta'); await s.keyboard.press('a'); await s.keyboard.up('Meta');
+    comprobar(await sel() === 3, '⌘A selecciona todas');
+    await s.keyboard.down('Meta'); await s.keyboard.press('d'); await s.keyboard.up('Meta');
+    comprobar((await s.evaluate(() => window.editor.doc().capas.length)) === 6 && await sel() === 3, '⌘D duplica las tres y deja seleccionadas las copias');
+    await s.keyboard.press('Backspace');
+    comprobar((await s.evaluate(() => window.editor.doc().capas.length)) === 3, 'Supr borra las tres copias');
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {
