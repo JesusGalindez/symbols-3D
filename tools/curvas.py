@@ -270,6 +270,45 @@ def aplanar(nodos, tol=0.0001, cerrado=True):
     return [[x, y] for x, y, _, _ in aplanar_t(nodos, tol, cerrado)]
 
 
+def redondear(nodos, cerrado=True):
+    """Radio de esquina (G6): cada nodo con "radio" > 0 cuyos dos tramos son rectos se
+    sustituye por el arco tangente a los dos (dos nodos y una cúbica de arco), como Figma:
+    el radio se limita para que el arco no pase de la mitad del tramo más corto. Los
+    extremos de un camino abierto y los nodos alineados no cambian. En floats de Python,
+    operación por operación como redondear() de editor.html (lo comprueba una prueba)."""
+    n = len(nodos)
+    if not any(nd.get("radio") for nd in nodos):
+        return nodos
+    out = []
+    for i, nd in enumerate(nodos):
+        r = nd.get("radio") or 0
+        if r <= 0 or nd["ent"] is not None or nd["sal"] is not None or (not cerrado and i in (0, n - 1)):
+            out.append(nd)
+            continue
+        a, c = nodos[(i - 1) % n], nodos[(i + 1) % n]
+        if a["sal"] is not None or c["ent"] is not None:
+            out.append(nd)  # un tramo curvo: la esquina se queda viva
+            continue
+        bx, by = nd["p"]
+        ux, uy = a["p"][0] - bx, a["p"][1] - by
+        vx, vy = c["p"][0] - bx, c["p"][1] - by
+        la, lc = math.sqrt(ux * ux + uy * uy), math.sqrt(vx * vx + vy * vy)  # no hypot: la misma cuenta que en JS
+        if la == 0 or lc == 0:
+            out.append(nd)
+            continue
+        ux, uy, vx, vy = ux / la, uy / la, vx / lc, vy / lc
+        ang = math.acos(max(-1.0, min(1.0, ux * vx + uy * vy)))  # el ángulo de la esquina
+        if ang < 1e-9 or math.pi - ang < 1e-9:
+            out.append(nd)
+            continue
+        d = min(r / math.tan(ang / 2), la / 2, lc / 2)  # de la esquina al punto de tangencia
+        re = d * math.tan(ang / 2)
+        k = 4 / 3 * math.tan((math.pi - ang) / 4) * re  # tirador del arco de barrido π − ang
+        out.append({"p": [bx + ux * d, by + uy * d], "ent": None, "sal": [-ux * k, -uy * k], "tipo": "vivo"})
+        out.append({"p": [bx + vx * d, by + vy * d], "ent": [-vx * k, -vy * k], "sal": None, "tipo": "vivo"})
+    return out
+
+
 def partir_camino(nodos, cortes, cerrado):
     """Un camino de nodos partido en los puntos cortes = [(k, t), ...] (tramo k, parámetro
     t): los trozos, abiertos, con las curvas partidas por De Casteljau. Cerrado y con un

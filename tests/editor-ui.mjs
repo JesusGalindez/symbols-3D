@@ -874,6 +874,54 @@ try {
     await s.close();
   }
 
+  // G6: radio de esquinas (capa y nodo), tipo de nodo en el panel y curvar con ⌘
+  {
+    const cuadro = (id, nombre, [x, y, w, h]) => ({ id, nombre, op: 'unir', visible: true, t: { x, y, r: 0, sx: 1, sy: 1 },
+      anillos: [[[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map((p) => ({ p, ent: null, sal: null, tipo: 'vivo' }))] });
+    mkdirSync(join(e.salida, 'editor'), { recursive: true });
+    writeFileSync(join(e.salida, 'editor', 'esquinas.json'), JSON.stringify({ version: 3, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      capas: [cuadro(1, 'Cuadrado', [0, 0, 0.4, 0.4])] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'esquinas');
+    const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+    const capa = () => s.evaluate(() => window.editor.doc().capas[0]);
+    const area = () => s.evaluate(() => window.editor.resultado().reduce((t, poli) => t + poli.reduce((u, a, k) => {
+      let d = 0; for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; }
+      return u + (k ? -1 : 1) * Math.abs(d / 2); }, 0), 0));
+    await s.click('#capas li[data-id="1"] .nom');
+    await s.$eval('[data-radio=capa]', (i) => { i.value = '0.05'; i.dispatchEvent(new Event('change', { bubbles: true })); });
+    comprobar((await capa()).anillos[0].every((n) => n.radio === 0.05), 'el radio de la capa va a sus cuatro esquinas');
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    // la exacta del servidor lleva además el redondeo del acabado (canto): se compara con la vista
+    const plano = await s.evaluate(() => { const c = window.editor.doc().capas[0];
+      const a = window.editor.aplanar(window.editor.redondear(c.anillos[0])); let d = 0;
+      for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; } return Math.abs(d / 2); });
+    comprobar(Math.abs(plano - (0.16 - (4 - Math.PI) * 0.0025)) < 2e-5 && Math.abs(await area() - plano) < 2e-3, `la vista y el servidor redondean las esquinas (área ${plano.toFixed(5)})`);
+    // radio de un nodo y tipo de nodo desde el panel
+    await s.keyboard.press('Enter');
+    const n0 = await s.$eval('#sobre .nodo[data-nodo="0,0"]', (x) => { const r = x.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    await s.mouse.click(...n0);
+    await s.$eval('[data-radio=nodo]', (i) => { i.value = '0'; i.dispatchEvent(new Event('change', { bubbles: true })); });
+    comprobar(!('radio' in (await capa()).anillos[0][0]) && (await capa()).anillos[0][1].radio === 0.05, 'el radio de un nodo se cambia solo en ese nodo');
+    await s.select('[data-nodo-tipo]', 'espejo');
+    const nt = (await capa()).anillos[0][0];
+    comprobar(nt.tipo === 'espejo' && nt.ent && Math.abs(nt.ent[0] + nt.sal[0]) < 1e-12 && Math.abs(nt.ent[1] + nt.sal[1]) < 1e-12, 'el panel lo hace nodo espejo (tiradores opuestos e iguales)');
+    // curvar el tramo de arriba (del nodo 2 al 3) con ⌘ + arrastrar: la curva pasa por el punto soltado
+    const [a0x, a0y] = await cli(0, 0.2), [a1x, a1y] = await cli(0.03, 0.32);
+    await s.keyboard.down('Meta'); await s.mouse.move(a0x, a0y); await s.mouse.down(); await s.mouse.move(a1x, a1y, { steps: 5 }); await s.mouse.up(); await s.keyboard.up('Meta');
+    const soltado = await s.evaluate(([x, y]) => { const r = document.querySelector('#dos').getBoundingClientRect(), [ox] = window.editor.aCliente(0, 0), [x1] = window.editor.aCliente(1, 0);
+      const [, oy] = window.editor.aCliente(0, 0); const z = x1 - ox; return [(x - ox) / z, -(y - oy) / z]; }, [a1x, a1y]);
+    const d = await s.evaluate((m) => {
+      const c = window.editor.doc().capas[0], r = c.anillos[0], a = r[2], b = r[3];
+      const P = [a.p, [a.p[0] + a.sal[0], a.p[1] + a.sal[1]], [b.p[0] + b.ent[0], b.p[1] + b.ent[1]], b.p];
+      const B = (t) => [0, 1].map((j) => (1 - t) ** 3 * P[0][j] + 3 * (1 - t) ** 2 * t * P[1][j] + 3 * (1 - t) * t * t * P[2][j] + t ** 3 * P[3][j]);
+      const dist = (t) => { const q = B(t); return Math.hypot(q[0] + c.t.x - m[0], q[1] + c.t.y - m[1]); };
+      let lo = 0, hi = 1; for (let i = 0; i < 200; i++) { const a = lo + (hi - lo) / 3, b = hi - (hi - lo) / 3; if (dist(a) < dist(b)) hi = b; else lo = a; }
+      return dist((lo + hi) / 2);
+    }, soltado);
+    comprobar(d < 1e-9, `⌘ + arrastrar curva el tramo y pasa por el punto soltado (a ${d.toExponential(1)})`);
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {

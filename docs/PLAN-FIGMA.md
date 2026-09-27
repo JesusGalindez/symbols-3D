@@ -522,6 +522,20 @@ servidor (paridad < 1e-12); en un triángulo muy agudo el radio se limita y la f
 sigue válida; curvar un tramo recto deja la curva pasando por el punto soltado (< 1e-9);
 el radio se aplica igual en una capa de trazo cerrada.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). Sobre lo previsto:
+- **El criterio del área (< 1e-6) no se puede cumplir con cúbicas:** un cuarto de
+  círculo en cúbica (el de Figma y SVG) abomba 2,7e-4 del radio, y con cuatro esquinas
+  de radio 0,05 eso son 2,2e-6 de área de más. La prueba mide la curva aplanada muy fina
+  (< 5e-6) y, aparte, la forma del servidor (< 2e-5: el aplanado a 1e-4 de todas las
+  curvas del editor quita 1,3e-5, hacia dentro).
+- El radio se guarda en el nodo en unidades de la capa (se muestra en las del mundo) y
+  la cuchilla hornea las esquinas redondeadas en nodos al cortar.
+- Paridad `redondear()` navegador ↔ servidor < 1e-12 (no bit a bit: `acos` y `tan` de
+  V8 y de la libm pueden diferir en la última cifra).
+- Curvar mueve los dos controles lo mismo para que la curva pase por el ratón en el t
+  del punto pulsado (limitado a 0,1–0,9 para que no se dispare junto a los nodos).
+Medido: pytest 74, `test:ui` 154 en verde; curvar deja la curva a 6e-17 del punto soltado.
+
 **Tarea de usuario (5 min):** en `fu-trazo` abierto como curvas, redondear las esquinas
 exteriores del trazo de la izquierda y curvar un tramo con ⌘. Hecho si: generado y
 APROBADO.

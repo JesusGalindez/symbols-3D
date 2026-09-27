@@ -193,7 +193,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
   <h4>Capas</h4><dl><dt>⇧⌘L</dt><dd>Bloquear (no se elige en el lienzo)</dd><dt>⇧⌘H</dt><dd>Mostrar u ocultar</dd>
     <dt>⌘R</dt><dd>Renombrar</dd><dt>Tab · ⇧Tab</dt><dd>La capa de encima · la de debajo</dd></dl>
   <h4>Nodos</h4><dl><dt>Doble clic en el borde</dt><dd>Añadir un nodo</dd><dt>Doble clic en un nodo</dt><dd>Esquina ↔ curva</dd>
-    <dt>⌥ + tirador</dt><dd>Separar los tiradores</dd><dt>Supr</dt><dd>Borrar el nodo</dd></dl>
+    <dt>⌥ + tirador</dt><dd>Separar los tiradores</dd><dt>⌘ + arrastrar un tramo</dt><dd>Curvarlo</dd><dt>Radio (panel)</dt><dd>Redondear esquinas (de la capa o del nodo)</dd><dt>Supr</dt><dd>Borrar el nodo</dd></dl>
   <h4>Precisión</h4><dl><dt>⇧ al mover</dt><dd>Un solo eje</dd><dt>⇧ al girar</dt><dd>De 15° en 15°</dd>
     <dt>⇧ al escalar</dt><dd>Con proporción</dd><dt>⌘ al arrastrar</dt><dd>Sin imán</dd></dl>
   <h4>Vista</h4><dl><dt>Rueda</dt><dd>Desplazar</dd><dt>⌘ + rueda · pellizco</dt><dd>Zoom</dd><dt>Espacio + arrastrar</dt><dd>Mover el lienzo</dd>
@@ -269,11 +269,38 @@ function aplanar(nodos, tol = 0.0001, cerrado = true) {
   return out;
 }
 const nodo = (p) => ({ p, ent: null, sal: null, tipo: 'vivo' });
+// Radio de esquina (G6): la de tools/curvas.py (redondear) operación por operación: cada
+// nodo vivo con radio cuyos dos tramos son rectos pasa a ser el arco tangente a ellos,
+// limitado a la mitad del tramo más corto
+function redondear(nodos, cerrado = true) {
+  const n = nodos.length;
+  if (!nodos.some((nd) => nd.radio)) return nodos;
+  const out = [];
+  nodos.forEach((nd, i) => {
+    const r = nd.radio || 0;
+    if (r <= 0 || nd.ent !== null || nd.sal !== null || (!cerrado && (i === 0 || i === n - 1))) { out.push(nd); return; }
+    const a = nodos[(i - 1 + n) % n], c = nodos[(i + 1) % n];
+    if (a.sal !== null || c.ent !== null) { out.push(nd); return; }
+    const [bx, by] = nd.p;
+    let ux = a.p[0] - bx, uy = a.p[1] - by, vx = c.p[0] - bx, vy = c.p[1] - by;
+    const la = Math.sqrt(ux * ux + uy * uy), lc = Math.sqrt(vx * vx + vy * vy);
+    if (la === 0 || lc === 0) { out.push(nd); return; }
+    ux /= la; uy /= la; vx /= lc; vy /= lc;
+    const ang = Math.acos(Math.max(-1, Math.min(1, ux * vx + uy * vy)));
+    if (ang < 1e-9 || Math.PI - ang < 1e-9) { out.push(nd); return; }
+    const d = Math.min(r / Math.tan(ang / 2), la / 2, lc / 2), re = d * Math.tan(ang / 2);
+    const k = 4 / 3 * Math.tan((Math.PI - ang) / 4) * re;
+    out.push({ p: [bx + ux * d, by + uy * d], ent: null, sal: [-ux * k, -uy * k], tipo: 'vivo' });
+    out.push({ p: [bx + vx * d, by + vy * d], ent: [-vx * k, -vy * k], sal: null, tipo: 'vivo' });
+  });
+  return out;
+}
+const conRadios = (c) => c.anillos.map((a) => redondear(a, !c.abierto));
 // la polilínea de la capa, cacheada por su lista de anillos (quien cambia nodos pone una nueva)
 const cachePlano = new WeakMap();
 function plano(c) {
   let r = cachePlano.get(c.anillos);
-  if (!r) { r = c.anillos.map((a) => aplanar(a, 0.0001, !c.abierto)); cachePlano.set(c.anillos, r); }
+  if (!r) { r = conRadios(c).map((a) => aplanar(a, 0.0001, !c.abierto)); cachePlano.set(c.anillos, r); }
   return r;
 }
 function caja(capa) {
@@ -305,7 +332,7 @@ const anillosMundo = (c) => plano(c).map((r) => r.map((p) => aMundo(c.t, p)));
 // basta con mover p y girar y escalar los tiradores
 function nodosMundo(c) {
   const [a, b, cc, d] = matCapa(c.t), L = (v) => v && [a * v[0] + cc * v[1], b * v[0] + d * v[1]];
-  return c.anillos.map((r) => r.map((n) => ({ p: aMundo(c.t, n.p), ent: L(n.ent), sal: L(n.sal) })));
+  return c.anillos.map((r) => r.map((n) => ({ p: aMundo(c.t, n.p), ent: L(n.ent), sal: L(n.sal), ...(n.radio ? { radio: n.radio * escalaCapa(c.t) } : {}) })));
 }
 const capasMundo = () => doc.capas.filter((c) => c.visible).map(capaMundo);
 const capaMundo = (c) => ({ id: c.id, nombre: c.nombre, op: c.op, anillos: nodosMundo(c), ...(c.trazo ? { trazo: c.trazo } : {}),
@@ -394,7 +421,7 @@ const nodosD = (anillos, abierto = false) => anillos.map((r) => 'M' + f6(...r[0]
 const cacheD = new WeakMap();
 function dCapa(c) {
   let d = cacheD.get(c.anillos);
-  if (d === undefined) { d = nodosD(c.anillos, c.abierto); cacheD.set(c.anillos, d); }
+  if (d === undefined) { d = nodosD(conRadios(c), c.abierto); cacheD.set(c.anillos, d); }
   return d;
 }
 let dExacto = '', dContorno = null, contornosPrev = [];
@@ -817,7 +844,14 @@ function panel() {
     if (c.costuras?.length) html += `<div class="fila"><span class="nota" style="padding:0;align-self:center">Costuras: ${c.costuras.length}</span>
       <button id="bCosturas" title="Quitar los cortes pendientes de esta capa">Quitar</button></div>`;
     html += panelTrazo([c]);
-    if (nodos) html += `<p class="nota">Arrastra un nodo o sus tiradores (⌥ los separa) · doble clic en un nodo: esquina ↔ curva ·
+    const vivos = c.anillos.flat().filter((n) => !n.ent && !n.sal), rc = vivos.length && vivos.every((n) => n.radio === vivos[0].radio) ? vivos[0].radio ?? 0 : '';
+    html += `<div class="rejilla"><label>Radio de esquinas<input type="text" inputmode="decimal" data-radio="capa" value="${rc === '' ? '' : num(rc * escalaCapa(c.t), 4)}" title="Todas las esquinas vivas (sin tiradores)"></label></div>`;
+    const ns = nodos && nodoSel && c.anillos[nodoSel.k]?.[nodoSel.i];
+    if (ns) html += `<h3>Nodo</h3><div class="rejilla">
+      <label>Tipo<select data-nodo-tipo="1">${[['vivo', 'Esquina (sin simetría)'], ['suave', 'Suave (ángulo)'], ['espejo', 'Espejo (ángulo y largo)']]
+        .map(([v, t]) => `<option value="${v}" ${ns.tipo === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label>Radio<input type="text" inputmode="decimal" data-radio="nodo" value="${num((ns.radio ?? 0) * escalaCapa(c.t), 4)}" ${ns.ent || ns.sal ? 'disabled title="Solo en esquinas"' : ''}></label></div>`;
+    if (nodos) html += `<p class="nota">Arrastra un nodo o sus tiradores (⌥ los separa) · ⌘ + arrastrar un tramo lo curva · doble clic en un nodo: esquina ↔ curva ·
       doble clic en el borde añade uno · Supr lo borra · flechas lo empujan.</p>`;
   } else if (varias()) {
     const g = grupoSel();
@@ -866,6 +900,14 @@ function panel() {
 $('#props').addEventListener('change', (e) => {
   const el = e.target, c = capaSel();
   if (el.id === 'dDesplazar') return;
+  if (el.dataset.radio && c) {  // en el mundo; en la capa se guarda dividido por su escala
+    const v = evaluar(el.value, 0);
+    if (!(v >= 0)) { el.blur(); return panel(); }
+    const rl = v / escalaCapa(c.t), pon = (n) => (!n.ent && !n.sal ? (rl > 0 ? { ...n, radio: rl } : (({ radio, ...m }) => m)(n)) : n);
+    c.anillos = el.dataset.radio === 'capa' ? c.anillos.map((a) => a.map(pon)) : c.anillos.map((a, k) => (k === nodoSel.k ? a.with(nodoSel.i, pon(a[nodoSel.i])) : a));
+    el.blur(); commit(); return;
+  }
+  if (el.dataset.nodoTipo && c && nodoSel) { tipoNodo(c, nodoSel.k, nodoSel.i, el.value); el.blur(); commit(); return; }
   if (el.dataset.gr) {  // el grupo elegido
     const g = grupoSel(), k = el.dataset.gr;
     if (k === 'nombre') g.nombre = el.value.trim() || g.nombre;
@@ -1096,6 +1138,9 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
     ultimoNodo = e.timeStamp;
     if (otraVez) { ultimoNodo = 0; alternarNodo(k, i); return; }
     nodoSel = { k, i }; arrastre = { tipo: 'nodo', k, i };
+  } else if (id && nodos && id === unica && e.metaKey) {  // curvar (G6)
+    const t = tramoCercano(c, m);
+    if (t && !(c.abierto && t.i === c.anillos[t.k].length - 1)) arrastre = { tipo: 'curvar', ...t, r0: c.anillos[t.k] };
   } else if (id && nodos && id === unica) {
     if (doble) insertarNodo(m);
   } else if (id) {
@@ -1205,6 +1250,17 @@ addEventListener('pointermove', (e) => {
     c.anillos = [...c.anillos];  // lista nueva: su trazado cacheado ya no vale
     c.anillos[A.k] = [...c.anillos[A.k]];
     c.anillos[A.k][A.i] = { ...c.anillos[A.k][A.i], p: aLocal(c.t, q) };  // los tiradores van con él
+  }
+  if (A.tipo === 'curvar') {
+    // el tramo pasa a ser la cúbica que va por el punto del ratón en su t: se mueven los dos
+    // controles lo mismo, δ = (q − B(t)) / (3t(1 − t)); los extremos no se mueven
+    const r = A.r0, a = r[A.i], b = r[(A.i + 1) % r.length], t = Math.min(0.9, Math.max(0.1, A.t));
+    const P = tramo(r, A.i) ?? [a.p, [a.p[0] + (b.p[0] - a.p[0]) / 3, a.p[1] + (b.p[1] - a.p[1]) / 3], [a.p[0] + 2 * (b.p[0] - a.p[0]) / 3, a.p[1] + 2 * (b.p[1] - a.p[1]) / 3], b.p];
+    const q = aLocal(c.t, m), B = enBezier(P, t), w = 3 * t * (1 - t), dx = (q[0] - B[0]) / w, dy = (q[1] - B[1]) / w;
+    const c1 = [P[1][0] + dx, P[1][1] + dy], c2 = [P[2][0] + dx, P[2][1] + dy];
+    const na = { ...a, sal: [c1[0] - a.p[0], c1[1] - a.p[1]], tipo: 'vivo' }, nb = { ...b, ent: [c2[0] - b.p[0], c2[1] - b.p[1]], tipo: 'vivo' };
+    c.anillos = c.anillos.map((x, k) => (k === A.k ? r.with(A.i, na).with((A.i + 1) % r.length, nb) : x));
+    A.tUsado = t;
   }
   if (A.tipo === 'tirador') {
     // espejo: el opuesto, igual y al revés; suave: alineado, con su largo; ⌥ los separa (vivo)
@@ -1460,6 +1516,34 @@ function tramo(r, i) {
 }
 const enBezier = ([p0, p1, p2, p3], t) => { const u = 1 - t;
   return [0, 1].map((j) => u * u * u * p0[j] + 3 * u * u * t * p1[j] + 3 * u * t * t * p2[j] + t * t * t * p3[j]); };
+// el tramo más cercano a m (en el mundo): { k, i, t } (anillo, nodo de salida, parámetro)
+function tramoCercano(c, m) {
+  let mejor = null;
+  c.anillos.forEach((r, k) => r.forEach((a, i) => {
+    if (c.abierto && i === r.length - 1) return;
+    const P = tramo(r, i), b = r[(i + 1) % r.length];
+    for (let j = 0; j <= 64; j++) {
+      const q = aMundo(c.t, P ? enBezier(P, j / 64) : [a.p[0] + (b.p[0] - a.p[0]) * j / 64, a.p[1] + (b.p[1] - a.p[1]) * j / 64]);
+      const d = Math.hypot(q[0] - m[0], q[1] - m[1]);
+      if (!mejor || d < mejor.d) mejor = { d, k, i, t: j / 64 };
+    }
+  }));
+  return mejor;
+}
+// tipo de nodo desde el panel: esquina (vivo), suave (tiradores alineados) o espejo (además,
+// del mismo largo); sin tiradores, suave y espejo los crean como el doble clic
+function tipoNodo(c, k, i, tipo) {
+  const r = c.anillos[k], n = r[i];
+  let nuevo = { ...n, tipo };
+  if (tipo !== 'vivo') {
+    if (!n.ent && !n.sal) { alternarNodo(k, i); return tipoNodo(c, k, i, tipo); }
+    const s0 = n.sal ?? [-n.ent[0], -n.ent[1]], e0 = n.ent ?? [-n.sal[0], -n.sal[1]];
+    const L = Math.hypot(...s0) || 1, le = tipo === 'espejo' ? (Math.hypot(...s0) + Math.hypot(...e0)) / 2 : Math.hypot(...e0);
+    const u = [s0[0] / L, s0[1] / L], ls = tipo === 'espejo' ? le : L;
+    nuevo = { ...nuevo, sal: [u[0] * ls, u[1] * ls], ent: [-u[0] * le, -u[1] * le] };
+  }
+  c.anillos = c.anillos.map((x, j) => (j === k ? x.with(i, nuevo) : x));
+}
 function insertarNodo(m) {
   // el punto del contorno más cercano (en el mundo; en una curva, muestreando su parámetro)
   const c = capaSel(), ml = aLocal(c.t, m);
@@ -2290,7 +2374,7 @@ $('#archivoSvg').addEventListener('change', async (e) => {
 });
 
 // para las pruebas de tests/: estado de solo lectura
-window.editor = { triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado, seleccion: () => selec, aplanar, svgDiseno, medidas: () => medida, evaluar };
+window.editor = { triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado, seleccion: () => selec, aplanar, redondear, svgDiseno, medidas: () => medida, evaluar };
 
 const lista = await api('/api/simbolos');
 ajustesBase = lista.ajustes;

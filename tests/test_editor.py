@@ -799,3 +799,45 @@ def test_grupos_anidados_y_el_sitio_de_un_grupo():
     grupos = [{"id": 2, "op": "intersecar", "visible": True}, {"id": 3, "op": "unir", "grupo": 2, "visible": True}]
     # grupo 2 = cuadro 0,2..0,6 ∪ (grupo 3: cuadrito) → interseca con el de abajo (0..0,4): 0,2 × 0,2
     assert abs(editor.planta(capas, None, grupos).area - (0.2 * 0.2 + 0.1 * 0.1)) < 1e-9
+
+
+# ---------- G6: esquinas y curvar
+def test_radio_de_esquina_da_el_area_del_cuadrado_redondeado():
+    """Criterio de G6: radio 0,05 en las cuatro esquinas de un cuadrado de lado 0,4 da
+    0,16 − (4 − π) · 0,05². Tolerancia 5e-6 y no 1e-6: un cuarto de círculo en cúbica (el
+    de Figma y SVG) abomba 2,7e-4 del radio, y con cuatro de radio 0,05 eso son 2,2e-6 de
+    área de más. Se mide la curva aplanada muy fina: el aplanado del servidor (1e-4, hacia
+    dentro) quita 1,3e-5 más, como en cualquier curva del editor."""
+    sq = [{"p": p, "ent": None, "sal": None, "radio": 0.05} for p in ([-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2])]
+    r = editor.curvas.redondear(sq)
+    assert len(r) == 8
+    assert abs(Polygon(editor.curvas.aplanar(r, 1e-9)).area - (0.16 - (4 - math.pi) * 0.05 ** 2)) < 5e-6
+    assert abs(editor.forma_de({"op": "unir", "anillos": [sq]}).area - (0.16 - (4 - math.pi) * 0.05 ** 2)) < 2e-5
+
+
+def test_radio_limitado_en_un_triangulo_agudo():
+    """Un radio enorme en un triángulo muy agudo se limita a la mitad del tramo más corto y
+    la forma sigue válida (como Figma)."""
+    tri = [{"p": p, "ent": None, "sal": None, "radio": 1.0} for p in ([0, 0], [0.4, 0.02], [0.4, -0.02])]
+    g = editor.forma_de({"op": "unir", "anillos": [tri]})
+    assert g.is_valid and 0 < g.area < 0.4 * 0.04 / 2
+
+
+def test_radio_en_un_trazo_cerrado():
+    sq = [{"p": p, "ent": None, "sal": None, "radio": 0.05} for p in ([-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2])]
+    c = {"op": "unir", "anillos": [sq], "trazo": {**editor.TRAZO, "ancho": 0.02}}
+    sin = {**c, "anillos": [[{k: v for k, v in n.items() if k != "radio"} for n in sq]]}
+    assert editor.forma_de(c).area < editor.forma_de(sin).area  # las esquinas del marco, redondeadas
+
+
+def test_redondear_es_la_misma_en_el_navegador():
+    """Paridad (< 1e-12): redondear() de editor.html y la de tools/curvas.py."""
+    import re
+    fuente = re.search(r"function redondear\(.*?\n}\n", (RAIZ / "editor.html").read_text(), re.S).group(0)
+    anillos = [[{"p": p, "ent": None, "sal": None, "tipo": "vivo", "radio": r} for p, r in
+                (([-0.2, -0.2], 0.05), ([0.3, -0.1], 0.2), ([0.25, 0.3], 0.01), ([-0.3, 0.2], 0))]]
+    js = fuente + f"console.log(JSON.stringify({json.dumps(anillos)}.map((a) => redondear(a))));"
+    r = json.loads(subprocess.run(["node", "-e", js], capture_output=True, text=True, check=True).stdout)
+    py = [editor.curvas.redondear(a) for a in anillos]
+    plano = lambda x: [v for a in x for n in a for k in ("p", "ent", "sal") if n[k] for v in n[k]]  # noqa: E731
+    assert len(plano(r)) == len(plano(py)) and max(abs(a - b) for a, b in zip(plano(r), plano(py))) < 1e-12

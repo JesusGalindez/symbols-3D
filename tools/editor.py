@@ -165,7 +165,7 @@ def exportar_svg(capas, simetria, color, grupos=None):
     centrado = lambda c: not c.get("trazo") or {**TRAZO, **c["trazo"]}["posicion"] == "centro"  # noqa: E731
     if simetria is None and not grupos and all(c["op"] == "unir" and centrado(c) for c in visibles):
         # un trazo sale como trazo de SVG (editable en Figma); dentro/fuera no existen en SVG
-        rutas = [(c.get("nombre", f"Capa {i + 1}"), [a for a in c["anillos"] if a and isinstance(a[0], dict)], c)
+        rutas = [(c.get("nombre", f"Capa {i + 1}"), [a for a in con_radios(c)["anillos"] if a and isinstance(a[0], dict)], c)
                  for i, c in enumerate(visibles)]
         pts = [q for c in visibles for p in s.lista(forma_de(c)) for q in p.exterior.coords]
     else:
@@ -205,9 +205,18 @@ EXTREMOS = {"redondo": "round", "plano": "flat", "cuadrado": "square"}
 UNIONES = {"redonda": "round", "inglete": "mitre", "bisel": "bevel"}
 
 
+def con_radios(c):
+    """La capa con los radios de esquina (G6) ya hechos arcos: lo que ven la forma, la
+    cuchilla y la exportación."""
+    if not any(isinstance(n, dict) and n.get("radio") for a in c["anillos"] for n in a):
+        return c
+    return {**c, "anillos": [curvas.redondear(a, not c.get("abierto")) if a and isinstance(a[0], dict) else a for a in c["anillos"]]}
+
+
 def forma_de(c):
     """La forma de una capa en el mundo: su relleno evenodd o, si tiene trazo, el trazo de
     su camino (abierto o cerrado) con su grosor. Un camino abierto sin trazo no rellena nada."""
+    c = con_radios(c)
     tr = c.get("trazo")
     if c.get("abierto") and not tr:
         raise ValueError("una capa abierta necesita un trazo")
@@ -462,6 +471,7 @@ def cortar(capas, linea):
     como nodos, con las curvas partidas por De Casteljau (curvas.recurvar)."""
     cortes, atraviesa, sin_esqueleto = [], [], []
     for c in capas:
+        c = con_radios(c)  # un corte hace nodos de las esquinas redondeadas
         forma = forma_de(c)
         if forma.is_empty:
             continue
@@ -760,7 +770,7 @@ CAMPOS = {
     "doc": {"version", "origen", "capas", "ajustes", "simetria", "guias", "grupos"},
     "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto", "grupo"},
     "grupo": {"id", "nombre", "op", "booleana", "visible", "abierto", "bloqueada", "grupo"},
-    "nodo": {"p", "ent", "sal", "tipo"},
+    "nodo": {"p", "ent", "sal", "tipo", "radio"},
 }
 
 
