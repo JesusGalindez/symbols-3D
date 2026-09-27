@@ -903,3 +903,39 @@ def test_version_con_nombre_sobrevive_al_recorte(salida, monkeypatch):
     assert editor.leer_copia("versiones", archivo)["capas"][0]["t"]["x"] == x0
     with pytest.raises(ValueError):
         editor.leer_copia("versiones", "../../x.json")
+
+
+# ---------- G11: simetría rotacional
+@pytest.mark.parametrize("n, espejo", [(4, False), (5, False), (6, True)])
+def test_simetria_rotacional_es_invariante_al_giro(n, espejo):
+    """La planta con simetría de orden n no cambia al girarla 360°/n (< 1e-9), y un anillo
+    alrededor del centro sale en una pieza (las n copias se funden sin rendija)."""
+    from shapely import affinity
+    capas = [{"op": "unir", "anillos": [[[-0.05, 0], [0.05, 0], [0.08, 0.45], [-0.02, 0.4]]]},
+             {"op": "unir", "anillos": [[[0.1, 0.1], [0.2, 0.12], [0.15, 0.25]]]}]
+    g = editor.planta(capas, {"rot": n, "espejo": espejo})
+    assert g.symmetric_difference(affinity.rotate(g, 360 / n, origin=(0, 0))).area < 1e-9
+    anillo = [{"op": "unir", "anillos": [list(Point(0, 0).buffer(0.3, quad_segs=32).exterior.coords)[:-1],
+                                         list(Point(0.01, 0).buffer(0.2, quad_segs=32).exterior.coords)[:-1]]}]
+    a = editor.planta(anillo, {"rot": n, "espejo": espejo})
+    assert len(s.lista(a)) == 1 and len(s.lista(a)[0].interiors) == 1
+
+
+def test_shou_circular_con_simetria_de_orden_2_sigue_aprobado(salida):
+    """shou-circular es simétrico al girarlo 180° (no 90°: IoU 0,80); con simetría
+    rotacional de orden 2 generado sigue APROBADO por el verificador."""
+    doc = editor.piezas_curvas("shou-circular")
+    doc["simetria"] = {"rot": 2}
+    editor.generar("shou-rot2", doc, en_mundo(doc))
+    codigo, v = verificar(salida / "glb" / "shou-rot2.glb", RAIZ / "fuentes" / "shou-circular.png")
+    assert codigo == 0 and v["aprobado"], v
+
+
+def test_simetria_rotacional_no_pierde_piezas():
+    """Seis pétalos sueltos (orden 6): seis piezas y seis veces el área del pétalo. Con el
+    buffer(±1e-9) en inglete que había al principio, GEOS perdía dos."""
+    t, co, si = (0.02, 0.3), math.cos(0.2), math.sin(0.2)
+    w = [[t[0] + co * u - si * v, t[1] + si * u + co * v] for u, v in [[-0.05, -0.12], [0.05, -0.12], [0.03, 0.12], [-0.04, 0.1]]]
+    capas = [{"op": "unir", "anillos": [w]}]
+    g = editor.planta(capas, {"rot": 6})
+    assert len(s.lista(g)) == 6 and abs(g.area - 6 * editor.forma_capa([w]).area) < 1e-9

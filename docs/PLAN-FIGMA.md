@@ -693,6 +693,21 @@ geometría es invariante a un giro de 90° (diferencia simétrica < 1e-9) y gene
 **APROBADO**; con orden N, las N copias se funden sin rendija (una pieza donde debe haber
 una); repetición radial de 6 da 6 capas a 60° exactos.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). Sobre lo previsto:
+- **`shou-circular` no tiene simetría de orden 4:** girado 90° su IoU consigo mismo es
+  0,80 (girado 180°, 0,99977). El criterio del plan era imposible tal cual: se prueba
+  con orden 2 (su simetría real), que el verificador aprueba, y el orden 4, 5 y 6 (con
+  espejo) sobre formas sintéticas: invariantes al giro (< 1e-9) y un anillo alrededor del
+  centro en una sola pieza. La tarea de usuario habría que hacerla con orden 2 (media
+  `shou-circular`) o con un sello propio de 4 o más.
+- Manda la cuña de 360°/n centrada arriba; con espejo, su mitad izquierda.
+- Las copias se funden ajustándolas a la rejilla de PRECISION antes y después de unirlas.
+  El primer intento cerraba grietas con `buffer(±1e-9)` en inglete y GEOS perdía piezas
+  (2 de 6 pétalos): hay una prueba para eso.
+- «Repetir en círculo» está en el panel de cualquier selección (alrededor del centro del
+  símbolo).
+Medido: pytest 82, `test:ui` 180 en verde.
+
 **Tarea de usuario (5 min):** rehacer un cuarto de `shou-circular` y completarlo con
 simetría rotacional de orden 4. Hecho si: generado y APROBADO.
 

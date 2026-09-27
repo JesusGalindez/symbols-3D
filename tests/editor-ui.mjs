@@ -1080,6 +1080,44 @@ try {
     await s.close();
   }
 
+  // G11: simetría rotacional (vista provisional y exacta invariante al giro) y repetir en
+  // círculo (6 copias a 60° exactos)
+  {
+    mkdirSync(join(e.salida, 'editor'), { recursive: true });
+    const petalo = { id: 1, nombre: 'Pétalo', op: 'unir', visible: true, t: { x: 0.02, y: 0.3, r: 0.2, sx: 1, sy: 1 },
+      anillos: [[[-0.05, -0.12], [0.05, -0.12], [0.03, 0.12], [-0.04, 0.1]].map((p) => ({ p, ent: null, sal: null, tipo: 'vivo' }))] };
+    writeFileSync(join(e.salida, 'editor', 'rosa.json'), JSON.stringify({ version: 3, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] }, capas: [petalo] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'rosa');
+    await s.select('[data-s=tipo]', 'rot');
+    await s.$eval('[data-s=orden]', (i) => { i.value = '6'; i.dispatchEvent(new Event('change', { bubbles: true })); });
+    comprobar((await s.evaluate(() => window.editor.doc().simetria)).rot === 6 && await s.$$eval('#lienzo .espejo-prov', (l) => l.length) === 5,
+      'simetría rotacional de orden 6: la vista provisional pinta los 5 giros');
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    const giro = await s.evaluate(() => {
+      const res = window.editor.resultado();
+      const en = ([x, y]) => res.some((poli) => poli.reduce((n, a) => {
+        let c = false; for (let i = 0, j = a.length - 1; i < a.length; j = i++) {
+          if ((a[i][1] > y) !== (a[j][1] > y) && x < (a[j][0] - a[i][0]) * (y - a[i][1]) / (a[j][1] - a[i][1]) + a[i][0]) c = !c;
+        } return n ^ c; }, false));
+      let distintos = 0, dentro = 0;
+      for (let k = 0; k < 600; k++) {
+        const p = [Math.random() - 0.5, Math.random() - 0.5], c = Math.cos(Math.PI / 3), s = Math.sin(Math.PI / 3), q = [c * p[0] - s * p[1], s * p[0] + c * p[1]];
+        if (en(p)) dentro++; if (en(p) !== en(q)) distintos++;
+      }
+      return { distintos, dentro, piezas: res.length };
+    });
+    comprobar(giro.dentro > 20 && giro.distintos <= 2 && giro.piezas === 6, `la exacta es invariante a 60°: 6 piezas, ${giro.distintos} de 600 puntos distintos de su giro (bordes)`);
+    // repetir en círculo sin simetría
+    await s.select('[data-s=tipo]', '');
+    await s.click('#capas li[data-id="1"] .nom');
+    await s.click('[data-repetir]');
+    const cs = await s.evaluate(() => window.editor.doc().capas.map((c) => c.t));
+    const ok = cs.length === 6 && cs.every((t, k) => Math.abs(t.r - (0.2 + k * Math.PI / 3)) < 1e-12
+      && Math.abs(Math.hypot(t.x, t.y) - Math.hypot(0.02, 0.3)) < 1e-12);
+    comprobar(ok, `repetir en círculo: 6 capas a 60° exactos alrededor del centro (${cs.length})`);
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {

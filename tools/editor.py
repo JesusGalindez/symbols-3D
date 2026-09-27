@@ -533,6 +533,8 @@ def simetrizar(geo, simetria):
     (0 y -0 son el mismo número): las dos mitades se funden sin rendija."""
     if not simetria:
         return geo
+    if simetria.get("rot"):
+        return simetria_rotacional(geo, int(simetria["rot"]), bool(simetria.get("espejo")))
     G = 10.0  # más grande que cualquier símbolo
     if simetria.get("lr"):
         lado = simetria.get("x", -1)
@@ -543,6 +545,31 @@ def simetrizar(geo, simetria):
         mitad = geo.intersection(box(-G, min(0.0, lado * G), G, max(0.0, lado * G)))
         geo = unary_union([mitad, affinity.scale(mitad, 1, -1, origin=(0, 0))])
     return shapely.set_precision(geo, PRECISION)
+
+
+def cuna(a0, a1, G=10.0):
+    """El sector de ángulos [a0, a1] (radianes) desde el origen, más grande que cualquier
+    símbolo: un polígono con el origen y un arco de puntos sobre un círculo de radio G."""
+    n = max(2, math.ceil((a1 - a0) / (math.pi / 90)))
+    return Polygon([(0.0, 0.0), *((G * math.cos(a0 + (a1 - a0) * k / n), G * math.sin(a0 + (a1 - a0) * k / n)) for k in range(n + 1))])
+
+
+def simetria_rotacional(geo, n, espejo=False):
+    """Simetría rotacional de orden n (G11): manda el sector de 360°/n centrado arriba
+    (con espejo, su mitad izquierda, que se refleja en el eje del sector: grupo diédrico)
+    y el resto son sus giros. Como las mitades de F2: se recorta lo que manda y se une con
+    sus copias, ajustadas a la rejilla de PRECISION antes y después de unirlas: así se
+    funden donde se tocan (un anillo alrededor del centro sale en una pieza). Nada de
+    buffer(±PRECISION) para cerrar grietas: el negativo en inglete de GEOS perdía piezas."""
+    paso = 2 * math.pi / n
+    a0 = math.pi / 2 - paso / 2
+    if espejo:
+        pieza = geo.intersection(cuna(a0, math.pi / 2))
+        pieza = unary_union([pieza, affinity.scale(pieza, -1, 1, origin=(0, 0))])  # el eje del sector es x = 0
+    else:
+        pieza = geo.intersection(cuna(a0, a0 + paso))
+    copias = [shapely.set_precision(affinity.rotate(pieza, k * paso, origin=(0, 0), use_radians=True), PRECISION) for k in range(n)]
+    return shapely.set_precision(unary_union(copias), PRECISION)
 
 
 def cortar(capas, linea):

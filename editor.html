@@ -490,6 +490,7 @@ let dExacto = '', dContorno = null, contornosPrev = [];
 const G = 10;  // más que cualquier símbolo
 function espejoProvisional(capas) {
   const S = doc.simetria;
+  if (S?.rot) return rotacionProvisional(capas, S);
   if (!S?.lr && !S?.ab) return '';
   const x0 = S.lr ? Math.min(0, S.x * G) : -G, x1 = S.lr ? Math.max(0, S.x * G) : G;
   const y0 = S.ab ? Math.min(0, S.y * G) : -G, y1 = S.ab ? Math.max(0, S.y * G) : G;
@@ -501,6 +502,37 @@ function espejoProvisional(capas) {
     (S.lr ? `<line class="eje-simetria" y1="-1000" y2="1000"/>` : '') + (S.ab ? `<line class="eje-simetria" x1="-1000" x2="1000"/>` : '');
 }
 
+// Simetría rotacional (G11), vista provisional: manda la cuña de 360°/n centrada arriba
+// (con espejo, su mitad izquierda y su reflejo); lo demás se tapa a medias y encima van
+// los giros de lo que manda. La geometría que cuenta: simetria_rotacional() del servidor
+function rotacionProvisional(capas, S) {
+  const n = S.rot, paso = 2 * Math.PI / n, a0 = Math.PI / 2 - paso / 2, a1 = S.espejo ? Math.PI / 2 : a0 + paso;
+  const arco = (a, b) => Array.from({ length: 31 }, (_, k) => { const t = a + (b - a) * k / 30; return `${G * Math.cos(t)} ${G * Math.sin(t)}`; }).join(' L');
+  const cunaD = `M0 0 L${arco(a0, a1)} Z`;
+  const pieza = `<g clip-path="url(#cuna)">${capas}</g>` + (S.espejo ? `<g transform="scale(-1 1)"><g clip-path="url(#cuna)">${capas}</g></g>` : '');
+  let html = `<defs><clipPath id="cuna" clipPathUnits="userSpaceOnUse"><path d="${cunaD}"/></clipPath></defs>` +
+    `<path class="tapa-prov" fill-rule="evenodd" d="M${-G} ${-G}H${G}V${G}H${-G}Z ${cunaD}"/>`;  // todo menos lo que manda
+  for (let k = 1; k < n; k++) html += `<g class="espejo-prov" transform="rotate(${k * 360 / n})">${pieza}</g>`;
+  if (S.espejo) html += `<g class="espejo-prov">${`<g transform="scale(-1 1)"><g clip-path="url(#cuna)">${capas}</g></g>`}</g>`;
+  for (let k = 0; k < n; k++) { const a = a0 + k * paso; html += `<line class="eje-simetria" x1="0" y1="0" x2="${G * Math.cos(a)}" y2="${G * Math.sin(a)}"/>`; }
+  return html;
+}
+// Repetir en círculo (G11): n − 1 copias de lo elegido giradas alrededor del origen
+function repetirCirculo(n) {
+  const cs = capasSel(); if (!cs.length || !(n >= 2)) return;
+  const nuevos = [];
+  for (let k = 1; k < n; k++) {
+    const th = k * 2 * Math.PI / n, co = Math.cos(th), si = Math.sin(th);
+    for (const c of cs) {
+      const copia = JSON.parse(JSON.stringify(c));
+      Object.assign(copia, { id: idSig++, nombre: `${c.nombre} ${k + 1}/${n}` });
+      Object.assign(copia.t, { x: co * c.t.x - si * c.t.y, y: si * c.t.x + co * c.t.y, r: c.t.r + th });
+      doc.capas.push(copia); nuevos.push(copia.id);
+    }
+  }
+  selec = [...selec, ...nuevos]; commit();
+  estado(`Repetidas en círculo: ${n} en total`);
+}
 function dibujar() {
   let capas = '', esqueletos = '', recortes = '';
   let costuras = '';
@@ -886,7 +918,7 @@ function capasUI() {  // en árbol: los grupos con sangría, de arriba abajo
   $('#capas').innerHTML = html;
 }
 const num = (v, d = 3) => Number(v.toFixed(d));
-const tipoSimetria = () => { const S = doc.simetria; return S?.lr && S?.ab ? 'doble' : S?.lr ? 'lr' : S?.ab ? 'ab' : ''; };
+const tipoSimetria = () => { const S = doc.simetria; return S?.rot ? 'rot' : S?.lr && S?.ab ? 'doble' : S?.lr ? 'lr' : S?.ab ? 'ab' : ''; };
 function ladosSimetria() {  // qué mitad (o cuarto) manda: la otra es su reflejo
   const S = doc.simetria ?? { x: -1, y: 1 }, t = tipoSimetria();
   const op = t === 'lr' ? [[-1, S.y, 'Izquierda'], [1, S.y, 'Derecha']] : t === 'ab' ? [[S.x, 1, 'Arriba'], [S.x, -1, 'Abajo']]
@@ -957,9 +989,12 @@ function panel() {
     <label>Grosor<input type="text" inputmode="decimal" step="0.005" min="0.01" data-g="fondo" value="${num(a.fondo)}"></label>
     <label>Canto<input type="text" inputmode="decimal" step="0.001" min="0.001" data-g="bisel" value="${num(a.bisel)}"></label>
     <label class="ancho">Color<input type="color" data-g="color" value="${hex}"></label>
-    <label>Simetría<select data-s="tipo">${[['', 'Ninguna'], ['lr', 'Izq. ↔ der.'], ['ab', 'Arriba ↔ abajo'], ['doble', 'Doble']]
+    <label>Simetría<select data-s="tipo">${[['', 'Ninguna'], ['lr', 'Izq. ↔ der.'], ['ab', 'Arriba ↔ abajo'], ['doble', 'Doble'], ['rot', 'Rotacional']]
       .map(([v, n]) => `<option value="${v}" ${tipoSimetria() === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
-    <label>Manda<select data-s="lado" ${tipoSimetria() ? '' : 'disabled'}>${ladosSimetria()}</select></label></div>
+    ${tipoSimetria() === 'rot'
+      ? `<label>Orden<input type="text" inputmode="decimal" data-s="orden" value="${doc.simetria.rot}" title="Copias alrededor del centro (2 a 12); manda el sector de arriba"></label>
+         <label class="ancho" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" data-s="espejo" style="width:auto" ${doc.simetria.espejo ? 'checked' : ''}> Con espejo (manda media cuña)</label>`
+      : `<label>Manda<select data-s="lado" ${tipoSimetria() ? '' : 'disabled'}>${ladosSimetria()}</select></label>`}</div>
     <p class="nota">Unidades: diámetro del símbolo = 1. Grosor y canto de la galería: ${ajustesBase.fondo} y ${ajustesBase.bisel}.</p>`;
   if (generado) html += `<h3>Última generación · ${esc(generado.nombre)} · ${generado.aprobado ? 'APROBADO' : 'RECHAZADO'}</h3>
     <ul class="revision">${generado.comprobaciones.map((c) => `<li class="${c.pasa ? 'pasa' : 'falla'}" title="${esc(c.valor)}">${c.pasa ? 'PASA' : 'FALLA'} · ${esc(c.que)}</li>`).join('')}
@@ -971,7 +1006,7 @@ function panel() {
 
 $('#props').addEventListener('change', (e) => {
   const el = e.target, c = capaSel();
-  if (el.id === 'dDesplazar') return;
+  if (el.id === 'dDesplazar' || el.id === 'nRepetir') return;
   if (el.dataset.radio && c) {  // en el mundo; en la capa se guarda dividido por su escala
     const v = evaluar(el.value, 0);
     if (!(v >= 0)) { el.blur(); return panel(); }
@@ -999,8 +1034,14 @@ $('#props').addEventListener('change', (e) => {
     const v = el.dataset.tr === 'ancho' ? evaluar(el.value, trazoDe(c).ancho) : el.value;
     if (el.dataset.tr === 'ancho' && !(v > 0)) return;
     c.trazo = { ...c.trazo, [el.dataset.tr]: v };
+  } else if (el.dataset.s === 'tipo' && el.value === 'rot') {
+    doc.simetria = { rot: doc.simetria?.rot ?? 4, espejo: doc.simetria?.espejo ?? false };
+  } else if (el.dataset.s === 'orden' || el.dataset.s === 'espejo') {  // simetría rotacional (G11)
+    const v = el.dataset.s === 'orden' ? Math.round(evaluar(el.value, doc.simetria.rot)) : el.checked;
+    if (el.dataset.s === 'orden' && !(v >= 2 && v <= 12)) { el.blur(); return panel(); }
+    doc.simetria = { ...doc.simetria, [el.dataset.s === 'orden' ? 'rot' : 'espejo']: v };
   } else if (el.dataset.s) {
-    const S = doc.simetria ?? { x: -1, y: 1 };
+    const S = doc.simetria?.rot ? { x: -1, y: 1 } : doc.simetria ?? { x: -1, y: 1 };
     if (el.dataset.s === 'tipo') { S.lr = ['lr', 'doble'].includes(el.value); S.ab = ['ab', 'doble'].includes(el.value); }
     else [S.x, S.y] = el.value.split(',').map(Number);
     doc.simetria = S.lr || S.ab ? S : undefined;
@@ -1040,6 +1081,7 @@ $('#props').addEventListener('click', (e) => {
   if (e.target.dataset.booleana) booleanaSel(e.target.dataset.booleana);
   if (e.target.dataset.grAccion === 'desagrupar') desagrupar();
   if (e.target.dataset.aplanar) aplanarSel();
+  if (e.target.dataset.repetir) repetirCirculo(Math.round(evaluar($('#nRepetir').value, 6)));
   const a = e.target.dataset.trAccion, cs = capasSel();
   if (a === 'contornear') contornear(cs);
   if (a === 'convertir') { for (const c of cs) c.trazo = { ...TRAZO }; commit(); }
@@ -2201,6 +2243,8 @@ function panelTrazo(cs) {
     ${cerradasCon ? '<button data-tr-accion="quitar" title="Vuelve a ser una forma rellena">Quitar trazo</button>' : ''}</div>
     <div class="fila"><input type="number" id="dDesplazar" step="0.001" min="0" value="0.005" style="width:72px" title="Cuánto por cada lado">
     <button data-desplazar="1" title="Engrosar: un trazo, su grosor; una forma, su contorno">Engrosar</button><button data-desplazar="-1">Adelgazar</button></div>`;
+  html += `<h3>Repetir en círculo</h3><div class="fila"><input type="text" inputmode="decimal" id="nRepetir" value="6" style="width:52px" title="Cuántas en total">
+    <button data-repetir="1" title="Copias giradas alrededor del centro del símbolo">Repetir alrededor del centro</button></div>`;
   return html;
 }
 function aplicarCambios(lista) {  // lo que devuelve el servidor: por id, anillos en el mundo o un trazo nuevo
