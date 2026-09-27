@@ -663,7 +663,7 @@ def previa(doc, capas):
 # un editor anterior que ignorase un campo nuevo (p. ej. un trazo) lo borraría en silencio
 # al guardar.
 CAMPOS = {
-    "doc": {"version", "origen", "capas", "ajustes", "simetria"},
+    "doc": {"version", "origen", "capas", "ajustes", "simetria", "guias"},
     "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto"},
     "nodo": {"p", "ent", "sal", "tipo"},
 }

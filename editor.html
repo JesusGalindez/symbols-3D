@@ -112,6 +112,17 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #lienzo.herr-rect .capa,#lienzo.herr-elipse .capa,#lienzo.herr-cuchilla .capa,#lienzo.herr-pluma .capa{cursor:crosshair}
 #lienzo.pan,#lienzo.pan .capa{cursor:grab}
 #tres canvas{display:block}
+.regla{position:absolute;background:#262626;pointer-events:all;z-index:2;font-size:9px;fill:var(--tenue);cursor:default}
+.regla line{stroke:#555;stroke-width:1}
+.regla[hidden]{display:none}  /* en un <svg>, hidden solo no lo oculta */
+#reglaX{left:18px;right:0;top:0;height:18px;width:calc(100% - 18px);border-bottom:1px solid var(--borde);cursor:row-resize}
+#reglaY{left:0;top:18px;bottom:0;width:18px;height:calc(100% - 18px);border-right:1px solid var(--borde);cursor:col-resize}
+#sobre .guia-usuario{stroke:#00c2a8;stroke-width:1;pointer-events:none}
+#sobre .guia-toque{stroke:transparent;stroke-width:9;pointer-events:stroke}
+#sobre .guia-toque.gx{cursor:col-resize}
+#sobre .guia-toque.gy{cursor:row-resize}
+#sobre .medida{stroke:#ff4a3d;stroke-width:1;pointer-events:none}
+#sobre .medida-texto{fill:#fff;font-size:10px;paint-order:stroke;stroke:#ff4a3d;stroke-width:3px;stroke-linejoin:round;pointer-events:none}
 .etiqueta{position:absolute;left:10px;bottom:8px;color:var(--tenue);font-size:11px;pointer-events:none}
 </style>
 <script type="importmap">
@@ -152,7 +163,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     </div>
     <div id="props"></div>
   </aside>
-  <div id="dos"><svg id="lienzo"></svg><svg id="flotante"></svg><svg id="sobre"><g id="mundoSobre"><path id="contorno" class="contorno"/><g id="contornos"></g></g><g id="asas"></g></svg><div id="etiqueta2d" class="etiqueta"></div></div>
+  <div id="dos"><svg id="lienzo"></svg><svg id="flotante"></svg><svg id="sobre"><g id="mundoSobre"><path id="contorno" class="contorno"/><g id="contornos"></g></g><g id="asas"></g></svg><div id="etiqueta2d" class="etiqueta"></div><svg id="reglaX" class="regla" hidden></svg><svg id="reglaY" class="regla" hidden></svg></div>
   <div id="tres"><div id="etiqueta3d" class="etiqueta"></div></div>
 </div>
 <div id="ayuda" hidden><div class="caja-ayuda">
@@ -174,7 +185,9 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
   <h4>Precisión</h4><dl><dt>⇧ al mover</dt><dd>Un solo eje</dd><dt>⇧ al girar</dt><dd>De 15° en 15°</dd>
     <dt>⇧ al escalar</dt><dd>Con proporción</dd><dt>⌘ al arrastrar</dt><dd>Sin imán</dd></dl>
   <h4>Vista</h4><dl><dt>Rueda</dt><dd>Desplazar</dd><dt>⌘ + rueda · pellizco</dt><dd>Zoom</dd><dt>Espacio + arrastrar</dt><dd>Mover el lienzo</dd>
+    <dt>⌥ con algo elegido</dt><dd>Medir distancias (a la capa bajo el ratón o al círculo)</dd><dt>⇧R</dt><dd>Reglas; arrastrar desde una saca una guía (de vuelta a la regla, se borra)</dd>
     <dt>⇧1 · ⇧2 · ⇧0</dt><dd>Ajustar a todo · a la selección · 100 %</dd><dt>⌘+ · ⌘−</dt><dd>Acercar · alejar</dd></dl>
+  <h4>Campos</h4><dl><dt>0,2*3 · (1+2)/4</dt><dd>Operaciones</dd><dt>+0,01 · *2 · /2</dt><dd>Sobre el valor actual</dd><dt>50%</dt><dd>Del valor actual</dd></dl>
   <h4>Archivos</h4><dl><dt>Abrir → Importar SVG…</dt><dd>Un logotipo con sus curvas, una capa por figura</dd>
     <dt>SVG</dt><dd>Exportar el diseño con sus curvas</dd><dt>Generar GLB</dt><dd>Detallada, ligera y web, con su revisión</dd>
     <dt>? · Esc</dt><dd>Abrir y cerrar esta ayuda</dd></dl>
@@ -561,7 +574,113 @@ function sobre() {
       ? `<ellipse class="dibujo" cx="${(x0 + x1) / 2}" cy="${(y0 + y1) / 2}" rx="${Math.abs(x1 - x0) / 2}" ry="${Math.abs(y1 - y0) / 2}"/>`
       : `<rect class="dibujo" x="${Math.min(x0, x1)}" y="${Math.min(y0, y1)}" width="${Math.abs(x1 - x0)}" height="${Math.abs(y1 - y0)}"/>`;
   }
+  html += dibujoGuias() + dibujoMedidas();
   $('#asas').innerHTML = html;
+  reglas();
+}
+
+// ---------- medir, reglas y guías (G3)
+// ⌥ con algo elegido: distancias (en rojo, como Figma) entre la caja de la selección y la
+// de la capa bajo el ratón o, sin capa, el círculo de diámetro 1 (el «marco» aquí). En modo
+// nodos, del nodo elegido al borde más cercano de la otra capa. Las cajas de los trazos
+// cuentan su grosor (es lo que será la pieza).
+let medida = [], ultimoRaton = null;
+function medirCajas(B, T) {
+  const out = [], seg = (a, b) => { const d = Math.hypot(b[0] - a[0], b[1] - a[1]); if (d > 1e-12) out.push({ a, b, d }); };
+  const y = Math.max(B[1], T[1]) < Math.min(B[3], T[3]) ? (Math.max(B[1], T[1]) + Math.min(B[3], T[3])) / 2 : (B[1] + B[3]) / 2;
+  const x = Math.max(B[0], T[0]) < Math.min(B[2], T[2]) ? (Math.max(B[0], T[0]) + Math.min(B[2], T[2])) / 2 : (B[0] + B[2]) / 2;
+  const eje = (i, recta) => {  // i = 0 (x) o 1 (y); recta(v) el punto de la línea en v
+    if (T[i] >= B[i + 2]) seg(recta(B[i + 2]), recta(T[i]));
+    else if (T[i + 2] <= B[i]) seg(recta(T[i + 2]), recta(B[i]));
+    else if ((T[i] <= B[i] && T[i + 2] >= B[i + 2]) || (B[i] <= T[i] && B[i + 2] >= T[i + 2])) {  // una dentro de la otra
+      seg(recta(Math.min(T[i], B[i])), recta(Math.max(T[i], B[i]))); seg(recta(Math.min(T[i + 2], B[i + 2])), recta(Math.max(T[i + 2], B[i + 2])));
+    }
+  };
+  eje(0, (v) => [v, y]); eje(1, (v) => [x, v]);
+  return out;
+}
+function medir(e) {
+  const antes = medida.length;
+  medida = [];
+  if (e?.altKey && selec.length && !arrastre && herramienta === 'mover') {
+    const el = document.elementFromPoint(e.clientX, e.clientY), id = Number(el?.closest?.('[data-id]')?.dataset.id);
+    const otra = doc.capas.find((k) => k.id === id && !selec.includes(id) && k.visible), c = capaSel();
+    if (nodos && nodoSel && c && otra) {  // del nodo al borde más cercano
+      const q = aMundo(c.t, c.anillos[nodoSel.k][nodoSel.i].p);
+      let mejor = null;
+      for (const r of anillosMundo(otra)) for (let i = 0; i < r.length; i++) {
+        const a = r[i], b = r[(i + 1) % r.length], [d, t] = distSeg(q, a, b);
+        if (!mejor || d < mejor.d) mejor = { d, b: [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])] };
+      }
+      if (mejor && mejor.d > 1e-12) medida = [{ a: q, b: mejor.b, d: mejor.d }];
+    } else medida = medirCajas(cajaGrupo(capasSel()), otra ? cajaReal(otra) : [-0.5, -0.5, 0.5, 0.5]);
+  }
+  if (medida.length || antes) sobre();
+}
+function dibujoMedidas() {
+  return medida.map(({ a, b, d }) => {
+    const [x0, y0] = aPantalla(a), [x1, y1] = aPantalla(b);
+    return `<line class="medida" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"/>` +
+      `<text class="medida-texto" x="${(x0 + x1) / 2 + 4}" y="${(y0 + y1) / 2 - 4}">${num(d, 4)}</text>`;
+  }).join('');
+}
+// Reglas (⇧R) y guías: se sacan arrastrando desde una regla (la de arriba da guías
+// horizontales; la de la izquierda, verticales), se mueven arrastrándolas y se borran
+// devolviéndolas a la regla. Van en el documento (doc.guias) y atraen como los ejes.
+let verReglas = false;
+function reglas() {
+  const X = $('#reglaX'), Y = $('#reglaY');
+  X.toggleAttribute('hidden', !verReglas); Y.toggleAttribute('hidden', !verReglas);  // en <svg> no hay .hidden
+  if (!verReglas) return;
+  const [w, h] = tam(), minimo = 60 / vista.zoom, pot = 10 ** Math.floor(Math.log10(minimo));
+  const paso = [1, 2, 5, 10].map((k) => k * pot).find((k) => k >= minimo);
+  const marcas = (desde, hasta, px, horizontal) => {
+    let out = '';
+    for (let v = Math.ceil(desde / paso) * paso; v <= hasta; v += paso) {
+      const p = px(v), t = +v.toFixed(6);
+      out += horizontal ? `<line x1="${p}" y1="10" x2="${p}" y2="18"/><text x="${p + 2}" y="9">${t}</text>`
+        : `<line x1="10" y1="${p}" x2="18" y2="${p}"/><text x="1" y="${p - 2}" transform="rotate(-90 1 ${p - 2})">${t}</text>`;
+    }
+    return out;
+  };
+  const x0 = vista.cx - w / 2 / vista.zoom, x1 = vista.cx + w / 2 / vista.zoom, y0 = vista.cy - h / 2 / vista.zoom, y1 = vista.cy + h / 2 / vista.zoom;
+  X.innerHTML = marcas(x0, x1, (v) => aPantalla([v, 0])[0] - 18, true);
+  Y.innerHTML = marcas(y0, y1, (v) => aPantalla([0, v])[1] - 18, false);
+}
+function dibujoGuias() {
+  const [w, h] = tam();
+  let out = '';
+  (doc.guias?.x ?? []).forEach((v, i) => { const [x] = aPantalla([v, 0]);
+    out += `<line class="guia-usuario" x1="${x}" y1="0" x2="${x}" y2="${h}"/><line class="guia-toque gx" data-guia="x,${i}" x1="${x}" y1="0" x2="${x}" y2="${h}"/>`; });
+  (doc.guias?.y ?? []).forEach((v, i) => { const [, y] = aPantalla([0, v]);
+    out += `<line class="guia-usuario" x1="0" y1="${y}" x2="${w}" y2="${y}"/><line class="guia-toque gy" data-guia="y,${i}" x1="0" y1="${y}" x2="${w}" y2="${y}"/>`; });
+  return out;
+}
+// Campos con operaciones, como Figma: «0,2*3», «+0,01» (suma a lo que hay), «*2», «/2»,
+// «50%» (del valor actual). Un evaluador propio (números, + − * / y paréntesis), nunca
+// eval: cualquier otra cosa da NaN y el campo no cambia.
+function evaluar(texto, actual) {
+  let t = String(texto).trim().replace(/,/g, '.').replace(/\s+/g, '');
+  if (!t) return NaN;
+  let op = null;
+  if (/^[+*/]/.test(t)) { op = t[0]; t = t.slice(1); }
+  const pct = t.endsWith('%');
+  if (pct) t = t.slice(0, -1);
+  let i = 0;
+  const numero = () => { const m = /^\d*\.?\d+(e[+-]?\d+)?|^\d+\./i.exec(t.slice(i)); if (!m) throw 0; i += m[0].length; return Number(m[0]); };
+  const factor = () => {
+    if (t[i] === '-') { i++; return -factor(); }
+    if (t[i] === '+') { i++; return factor(); }
+    if (t[i] === '(') { i++; const v = suma(); if (t[i++] !== ')') throw 0; return v; }
+    return numero();
+  };
+  const producto = () => { let v = factor(); while (t[i] === '*' || t[i] === '/') v = t[i++] === '*' ? v * factor() : v / factor(); return v; };
+  const suma = () => { let v = producto(); while (t[i] === '+' || t[i] === '-') v = t[i++] === '+' ? v + producto() : v - producto(); return v; };
+  let v;
+  try { v = suma(); if (i !== t.length) return NaN; } catch { return NaN; }
+  if (pct) v = actual * v / 100;
+  v = op === '+' ? actual + v : op === '*' ? actual * v : op === '/' ? actual / v : v;
+  return Number.isFinite(v) ? v : NaN;
 }
 
 // ---------- geometría exacta (servidor)
@@ -620,11 +739,11 @@ function panel() {
       <label class="ancho">Operación<select data-p="op">
         <option value="unir" ${c.op === 'unir' ? 'selected' : ''}>Unir</option>
         <option value="restar" ${c.op === 'restar' ? 'selected' : ''}>Restar lo de debajo</option></select></label>
-      <label>X<input type="number" step="0.005" data-p="x" value="${num(c.t.x)}"></label>
-      <label>Y<input type="number" step="0.005" data-p="y" value="${num(c.t.y)}"></label>
-      <label>Ancho<input type="number" step="0.005" min="0.001" data-p="w" value="${num((b[2] - b[0]) * Math.abs(c.t.sx))}"></label>
-      <label>Alto<input type="number" step="0.005" min="0.001" data-p="h" value="${num((b[3] - b[1]) * Math.abs(c.t.sy))}"></label>
-      <label>Rotación °<input type="number" step="1" data-p="r" value="${num(c.t.r * 180 / Math.PI, 1)}"></label>
+      <label>X<input type="text" inputmode="decimal" step="0.005" data-p="x" value="${num(c.t.x)}"></label>
+      <label>Y<input type="text" inputmode="decimal" step="0.005" data-p="y" value="${num(c.t.y)}"></label>
+      <label>Ancho<input type="text" inputmode="decimal" step="0.005" min="0.001" data-p="w" value="${num((b[2] - b[0]) * Math.abs(c.t.sx))}"></label>
+      <label>Alto<input type="text" inputmode="decimal" step="0.005" min="0.001" data-p="h" value="${num((b[3] - b[1]) * Math.abs(c.t.sy))}"></label>
+      <label>Rotación °<input type="text" inputmode="decimal" step="1" data-p="r" value="${num(c.t.r * 180 / Math.PI, 1)}"></label>
       <label>Nodos<input disabled value="${c.anillos.reduce((n, r) => n + r.length, 0)}"></label></div>`;
     if (c.costuras?.length) html += `<div class="fila"><span class="nota" style="padding:0;align-self:center">Costuras: ${c.costuras.length}</span>
       <button id="bCosturas" title="Quitar los cortes pendientes de esta capa">Quitar</button></div>`;
@@ -635,10 +754,10 @@ function panel() {
     const B = cajaGrupo(capasSel()), n = selec.length, ok = B[0] <= B[2];
     const bot = (k, txt, t) => `<button data-alinear="${k}" title="${t}">${txt}</button>`;
     html += `<h3>Selección · ${n} capas</h3><div class="rejilla">
-      <label>X centro<input type="number" step="0.005" data-q="x" value="${ok ? num((B[0] + B[2]) / 2) : ''}"></label>
-      <label>Y centro<input type="number" step="0.005" data-q="y" value="${ok ? num((B[1] + B[3]) / 2) : ''}"></label>
-      <label>Ancho<input type="number" step="0.005" min="0.001" data-q="w" value="${ok ? num(B[2] - B[0]) : ''}"></label>
-      <label>Alto<input type="number" step="0.005" min="0.001" data-q="h" value="${ok ? num(B[3] - B[1]) : ''}"></label></div>
+      <label>X centro<input type="text" inputmode="decimal" step="0.005" data-q="x" value="${ok ? num((B[0] + B[2]) / 2) : ''}"></label>
+      <label>Y centro<input type="text" inputmode="decimal" step="0.005" data-q="y" value="${ok ? num((B[1] + B[3]) / 2) : ''}"></label>
+      <label>Ancho<input type="text" inputmode="decimal" step="0.005" min="0.001" data-q="w" value="${ok ? num(B[2] - B[0]) : ''}"></label>
+      <label>Alto<input type="text" inputmode="decimal" step="0.005" min="0.001" data-q="h" value="${ok ? num(B[3] - B[1]) : ''}"></label></div>
       <div class="fila">${bot('izq', '⇤', 'Alinear a la izquierda')}${bot('centro', '↔', 'Centrar en horizontal')}${bot('der', '⇥', 'Alinear a la derecha')}
         ${bot('arriba', '⤒', 'Alinear arriba')}${bot('medio', '↕', 'Centrar en vertical')}${bot('abajo', '⤓', 'Alinear abajo')}</div>
       <div class="fila"><button data-distribuir="0" ${n < 3 ? 'disabled' : ''} title="Mismo hueco en horizontal (3 o más)">Distribuir ↔</button>
@@ -650,8 +769,8 @@ function panel() {
   }
   const hex = '#' + new THREE.Color().setRGB(a.color[0], a.color[1], a.color[2], THREE.LinearSRGBColorSpace).getHexString();
   html += `<h3>Acabado (todo el símbolo)</h3><div class="rejilla">
-    <label>Grosor<input type="number" step="0.005" min="0.01" data-g="fondo" value="${num(a.fondo)}"></label>
-    <label>Canto<input type="number" step="0.001" min="0.001" data-g="bisel" value="${num(a.bisel)}"></label>
+    <label>Grosor<input type="text" inputmode="decimal" step="0.005" min="0.01" data-g="fondo" value="${num(a.fondo)}"></label>
+    <label>Canto<input type="text" inputmode="decimal" step="0.001" min="0.001" data-g="bisel" value="${num(a.bisel)}"></label>
     <label class="ancho">Color<input type="color" data-g="color" value="${hex}"></label>
     <label>Simetría<select data-s="tipo">${[['', 'Ninguna'], ['lr', 'Izq. ↔ der.'], ['ab', 'Arriba ↔ abajo'], ['doble', 'Doble']]
       .map(([v, n]) => `<option value="${v}" ${tipoSimetria() === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
@@ -669,7 +788,7 @@ $('#props').addEventListener('change', (e) => {
   const el = e.target, c = capaSel();
   if (el.id === 'dDesplazar') return;
   if (el.dataset.tr) {  // el trazo de la capa elegida
-    const v = el.dataset.tr === 'ancho' ? Number(el.value) : el.value;
+    const v = el.dataset.tr === 'ancho' ? evaluar(el.value, trazoDe(c).ancho) : el.value;
     if (el.dataset.tr === 'ancho' && !(v > 0)) return;
     c.trazo = { ...c.trazo, [el.dataset.tr]: v };
   } else if (el.dataset.s) {
@@ -678,9 +797,11 @@ $('#props').addEventListener('change', (e) => {
     else [S.x, S.y] = el.value.split(',').map(Number);
     doc.simetria = S.lr || S.ab ? S : undefined;
   } else if (el.dataset.q) {  // la selección entera: X, Y la mueven; ancho y alto la escalan desde el centro
-    const cs = capasSel(), B = cajaGrupo(cs), v = Number(el.value), q = el.dataset.q;
-    if (!Number.isFinite(v) || !(B[0] <= B[2])) return;
+    const cs = capasSel(), B = cajaGrupo(cs), q = el.dataset.q;
+    if (!(B[0] <= B[2])) return;
     const O = [(B[0] + B[2]) / 2, (B[1] + B[3]) / 2];
+    const v = evaluar(el.value, { x: O[0], y: O[1], w: B[2] - B[0], h: B[3] - B[1] }[q]);
+    if (!Number.isFinite(v)) { el.blur(); return panel(); }
     if (q === 'x' || q === 'y') for (const k of cs) k.t[q] += v - O[q === 'x' ? 0 : 1];
     else if (v > 0) escalarGrupo(cs, O, q === 'w' ? v / (B[2] - B[0] || 1) : 1, q === 'h' ? v / (B[3] - B[1] || 1) : 1);
   } else if (el.dataset.g) {
@@ -688,12 +809,14 @@ $('#props').addEventListener('change', (e) => {
     if (el.dataset.g === 'color') {
       const k = new THREE.Color(el.value);  // sRGB del selector -> lineal, como glTF
       a.color = [num(k.r, 4), num(k.g, 4), num(k.b, 4), 1];
-    } else if (Number(el.value) > 0) a[el.dataset.g] = Number(el.value);
+    } else { const v = evaluar(el.value, a[el.dataset.g]); if (v > 0) a[el.dataset.g] = v; }
   } else if (c) {
-    const p = el.dataset.p, v = el.value, b = caja(c);
+    const p = el.dataset.p, b = caja(c);
+    const actual = { x: c.t.x, y: c.t.y, r: c.t.r * 180 / Math.PI, w: (b[2] - b[0]) * Math.abs(c.t.sx), h: (b[3] - b[1]) * Math.abs(c.t.sy) }[p];
+    const v = p === 'nombre' || p === 'op' ? el.value : evaluar(el.value, actual);
     if (p === 'nombre') c.nombre = v || c.nombre;
     else if (p === 'op') c.op = v;
-    else if (!Number.isFinite(Number(v))) return;
+    else if (!Number.isFinite(Number(v))) { el.blur(); return panel(); }
     else if (p === 'x' || p === 'y') c.t[p] = Number(v);
     else if (p === 'r') c.t.r = Number(v) * Math.PI / 180;
     else if (p === 'w' && Number(v) > 0) c.t.sx = Math.sign(c.t.sx) * Number(v) / (b[2] - b[0] || 1);
@@ -812,6 +935,14 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   const m = deEvento(e), el = e.target, c = capaSel();
   if (e.button === 1 || espacio) { empezarGesto(); arrastre = { tipo: 'pan', x: e.clientX, y: e.clientY, cx: vista.cx, cy: vista.cy }; return; }
   if (e.button !== 0) return;
+  const regla = el.closest?.('.regla'), g = el.dataset?.guia;
+  if (regla || g) {  // sacar una guía de la regla, o mover una
+    doc.guias ??= { x: [], y: [] };
+    let eje, i;
+    if (g) { eje = g.split(',')[0]; i = Number(g.split(',')[1]); }
+    else { eje = regla.id === 'reglaX' ? 'y' : 'x'; doc.guias[eje].push(eje === 'x' ? m[0] : m[1]); i = doc.guias[eje].length - 1; }
+    arrastre = { tipo: 'guia', eje, i }; sobre(); return;
+  }
   if (herramienta === 'cuchilla') {
     const { p } = iman(m, cuchilla?.puntos.at(-1) ?? null, e);
     if (cuchilla) { cuchilla.puntos.push(p); cuchilla.cursor = p; }
@@ -887,6 +1018,9 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   todo();
 });
 addEventListener('pointermove', (e) => {
+  ultimoRaton = e;
+  if (e.altKey || medida.length) medir(e);
+  if (arrastre?.tipo === 'guia') { const m = deEvento(e); doc.guias[arrastre.eje][arrastre.i] = arrastre.eje === 'x' ? m[0] : m[1]; sobre(); return; }
   if (herramienta === 'pluma' && !arrastre) {
     const P = pluma?.arrastre, m = deEvento(e);
     if (P && (P.movido ||= Math.hypot(e.clientX - P.x, e.clientY - P.y) > 3)) {  // arrastrar: el nodo es una curva
@@ -1016,6 +1150,12 @@ addEventListener('pointerup', (e) => {
   if (!A) return;
   if (A.tipo === 'pan') { terminarGesto(); return; }
   if (A.tipo === 'recuadro') { todo(); return; }
+  if (A.tipo === 'guia') {  // de vuelta a la regla: se borra
+    const r = dos.getBoundingClientRect(), fuera = A.eje === 'y' ? e.clientY - r.top < 18 : e.clientX - r.left < 18;
+    if (fuera) doc.guias[A.eje].splice(A.i, 1);
+    if (!doc.guias.x.length && !doc.guias.y.length) delete doc.guias;
+    commit(); return;
+  }
   if (flota) soltarFlotante();  // commit() redibuja el lienzo con la capa en su sitio
   for (const k of A.capas ?? []) hornear(k);
   if (A.alSoltar && !A.movido) selec = A.alSoltar;
@@ -1066,6 +1206,8 @@ function cajaMundo(c, b = caja(c)) {
 function objetivosIman(capas) {
   // prioridad (0 manda): eje, círculo, cajas de capas, esquinas
   const xs = [{ v: 0, pr: 0 }, { v: -0.5, pr: 1 }, { v: 0.5, pr: 1 }], ys = [{ v: 0, pr: 0 }, { v: -0.5, pr: 1 }, { v: 0.5, pr: 1 }];
+  for (const v of doc.guias?.x ?? []) xs.push({ v, pr: 0 });  // las guías mandan como los ejes
+  for (const v of doc.guias?.y ?? []) ys.push({ v, pr: 0 });
   for (const o of doc.capas) if (o.visible && !capas.includes(o)) {
     const k = cajaMundo(o);
     for (const v of [k[0], (k[0] + k[2]) / 2, k[2]]) xs.push({ v, de: k, pr: 2 });
@@ -1260,6 +1402,7 @@ function alternarNodo(k, i) {
 addEventListener('keydown', (e) => {
   if (e.target.matches('input, select')) return;
   const mod = e.metaKey || e.ctrlKey, c = capaSel(), k = e.key.toLowerCase();
+  if (e.key === 'Alt') { if (ultimoRaton) medir({ altKey: true, clientX: ultimoRaton.clientX, clientY: ultimoRaton.clientY }); return; }
   if (e.code === 'Space') { e.preventDefault(); if (!espacio) { espacio = true; lienzo.classList.add('pan'); } return; }
   if (mod && k === 'z') { e.preventDefault(); irA(puntero + (e.shiftKey ? 1 : -1)); return; }
   if (mod && k === 'd') { e.preventDefault(); duplicar(); return; }
@@ -1277,6 +1420,7 @@ addEventListener('keydown', (e) => {
   if (e.shiftKey && e.code === 'Digit1') { ajustarVista(false); return; }
   if (e.shiftKey && e.code === 'Digit2') { ajustarVista(true); return; }
   if (e.shiftKey && k === 'h') { voltear(0); return; }
+  if (e.shiftKey && k === 'r') { verReglas = !verReglas; reglas(); return; }
   if (e.shiftKey && k === 'v') { voltear(1); return; }
   if (e.key === 'Tab') { e.preventDefault(); hermana(e.shiftKey ? -1 : 1); return; }
   if (e.shiftKey && e.code === 'Digit0') { vistaInicial(); vistaCambiada(); return; }
@@ -1303,7 +1447,10 @@ addEventListener('keydown', (e) => {
     commit();
   }
 });
-addEventListener('keyup', (e) => { if (e.code === 'Space') { espacio = false; lienzo.classList.remove('pan'); } });
+addEventListener('keyup', (e) => {
+  if (e.code === 'Space') { espacio = false; lienzo.classList.remove('pan'); }
+  if (e.key === 'Alt' && medida.length) { medida = []; sobre(); }
+});
 
 function herr(h) {
   herramienta = h; cuchilla = null; pluma = null; marcaIman = null; if (h !== 'mover') nodos = false; todo();
@@ -1328,6 +1475,8 @@ let sugeridas = null, peticionSug = 0, bordes = [], marcaIman = null;
 // Devuelve el punto y lo que se dibuja en rosa (el punto y sus guías).
 const ALCANCE = 0.15;  // el mismo que max_corte de las sugerencias: lo que cruza una unión
 const EJES = [{ o: [0, 0], u: [1, 0], k0: -Infinity, k1: Infinity }, { o: [0, 0], u: [0, 1], k0: -Infinity, k1: Infinity }];
+const rectasGuia = () => [...(doc.guias?.x ?? []).map((v) => ({ o: [v, 0], u: [0, 1], k0: -Infinity, k1: Infinity })),
+  ...(doc.guias?.y ?? []).map((v) => ({ o: [0, v], u: [1, 0], k0: -Infinity, k1: Infinity }))];
 function recta([a, b]) {
   const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
   return { o: a, u: [(b[0] - a[0]) / L, (b[1] - a[1]) / L], k0: -ALCANCE, k1: L + ALCANCE };
@@ -1356,7 +1505,7 @@ function iman(m, desde, e, fuente = bordes) {
     for (const [a, b] of fuente) for (const q of [a, b]) if (lejos(q, p) < tolP && (!mejor || lejos(q, p) < lejos(mejor, p))) mejor = q;
     if (mejor) return { p: mejor, marca: { p: mejor, guias: [] } };
   }
-  const cerca = [...fuente.map(recta), ...EJES].filter((r) => distRecta(p, r) < (rayo ? tolP : tolL))
+  const cerca = [...fuente.map(recta), ...EJES, ...rectasGuia()].filter((r) => distRecta(p, r) < (rayo ? tolP : tolL))
     .sort((a, b) => distRecta(p, a) - distRecta(p, b));
   if (rayo) {
     for (const r of cerca) { const q = cruce(rayo, r); if (q && lejos(q, p) < tolP) return { p: q, marca: { p: q, guias: [r] } }; }
@@ -1537,7 +1686,7 @@ function panelTrazo(cs) {
   const opc = (k, pares) => pares.map(([v, n]) => `<option value="${v}" ${tr[k] === v ? 'selected' : ''}>${n}</option>`).join('');
   let html = '<h3>Trazo</h3>';
   if (tr) html += `<div class="rejilla">
-      <label>Grosor<input type="number" step="0.005" min="0.001" data-tr="ancho" value="${num(tr.ancho, 4)}"></label>
+      <label>Grosor<input type="text" inputmode="decimal" step="0.005" min="0.001" data-tr="ancho" value="${num(tr.ancho, 4)}"></label>
       <label>Extremos<select data-tr="extremos">${opc('extremos', [['redondo', 'Redondos'], ['plano', 'Planos'], ['cuadrado', 'Cuadrados']])}</select></label>
       <label>Uniones<select data-tr="uniones">${opc('uniones', [['redonda', 'Redondas'], ['inglete', 'En inglete'], ['bisel', 'En bisel']])}</select></label>
       <label>Posición<select data-tr="posicion" ${c.abierto ? 'disabled' : ''}>${opc('posicion', [['centro', 'Centrado'], ['dentro', 'Dentro'], ['fuera', 'Fuera']])}</select></label></div>`;
@@ -1932,7 +2081,7 @@ $('#archivoSvg').addEventListener('change', async (e) => {
 });
 
 // para las pruebas de tests/: estado de solo lectura
-window.editor = { triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado, seleccion: () => selec, aplanar, svgDiseno };
+window.editor = { triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado, seleccion: () => selec, aplanar, svgDiseno, medidas: () => medida, evaluar };
 
 const lista = await api('/api/simbolos');
 ajustesBase = lista.ajustes;

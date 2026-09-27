@@ -351,6 +351,22 @@ conocidos coincide con la calculada a 1e-9; una guía en x = 0,137 atrae un bord
 y lo deja en 0,137 exacto; «+0,01» en X suma exactamente 0,01; el evaluador rechaza
 `alert(1)` y cualquier letra; presupuesto de 16 ms con ⌥ pulsada en `shou-circular`.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). Sobre lo previsto:
+- **Sin milímetros:** la decisión 5 los recomendaba solo si se van a fabricar piezas, y
+  eso no está dicho. Quedan fuera hasta que lo pidas (un campo de presentación, sin
+  tocar el GLB).
+- Medir compara la caja de la selección con la de la capa bajo el ratón: separadas, el
+  hueco; una dentro de otra, los dos bordes de cada eje (como Figma); solapadas a medias
+  en un eje, nada en ese eje.
+- Las guías atraen con la prioridad de los ejes, en el imán de mover capas y en el de
+  nodos y cuchilla.
+- En los campos, «+», «*», «/» delante operan sobre el valor actual; «−» delante es un
+  número negativo (si no, no se podría escribir −0,2).
+- Un `<svg>` no se oculta con `.hidden` (es de los elementos HTML): las reglas usan el
+  atributo y una regla CSS; invisibles, tapaban el borde del lienzo.
+Medido: `test:ui` 132 en verde, pytest 56; ⌥ sobre `shou-circular`, 1,0 ms por
+movimiento (mediana).
+
 **Tarea de usuario (3 min):** en `shou-cruz`, comprobar con ⌥ que los cuatro ganchos
 están a la misma distancia del centro y corregir el que no. Hecho si: las cuatro
 distancias coinciden a 0,001 y generado APROBADO.

@@ -707,6 +707,61 @@ try {
     await f.close();
   }
 
+  // G3: medir con ⌥, reglas y guías (que atraen como los ejes) y campos con operaciones
+  {
+    const cuadro = (id, nombre, [x, y, w, h]) => ({ id, nombre, op: 'unir', visible: true, t: { x, y, r: 0, sx: 1, sy: 1 },
+      anillos: [[[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map((p) => ({ p, ent: null, sal: null, tipo: 'vivo' }))] });
+    mkdirSync(join(e.salida, 'editor'), { recursive: true });
+    writeFileSync(join(e.salida, 'editor', 'medir.json'), JSON.stringify({ version: 2, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      guias: { x: [0.137] }, capas: [cuadro(1, 'A', [-0.2, 0, 0.1, 0.1]), cuadro(2, 'B', [0.2, 0.013, 0.1, 0.1])] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'medir');
+    const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+    await s.click('#capas li[data-id="1"] .nom');
+    await s.mouse.move(...await cli(0.2, 0.02));
+    await s.keyboard.down('Alt');
+    const m1 = await s.evaluate(() => window.editor.medidas());
+    comprobar(m1.length === 1 && Math.abs(m1[0].d - 0.3) < 1e-9, `⌥ mide la distancia entre las cajas (${m1.map((m) => m.d).join(', ')} = 0,3)`);
+    await s.mouse.move(...await cli(-0.2, -0.35));
+    const m2 = (await s.evaluate(() => window.editor.medidas())).map((m) => m.d).sort((a, b) => a - b);
+    comprobar(m2.length === 4 && Math.abs(m2[0] - 0.25) < 1e-9 && Math.abs(m2[3] - 0.65) < 1e-9, `sin capa debajo, al círculo de diámetro 1 (${m2.map((v) => v.toFixed(3)).join(', ')})`);
+    await s.keyboard.up('Alt');
+    comprobar((await s.evaluate(() => window.editor.medidas())).length === 0, 'al soltar ⌥ se quitan');
+
+    // la guía x = 0,137 atrae el centro de B soltado a 3 px
+    const zoom = await s.evaluate(() => { const [a] = window.editor.aCliente(0, 0), [b] = window.editor.aCliente(1, 0); return b - a; });
+    const [bx, by] = await cli(0.2, 0.013);
+    await s.mouse.move(bx, by); await s.mouse.down();
+    const [gx] = await cli(0.137, 0);
+    await s.mouse.move((bx + gx) / 2, by, { steps: 4 }); await s.mouse.move(gx + 3, by, { steps: 4 }); await s.mouse.up();
+    const xB = await s.evaluate(() => window.editor.doc().capas.find((c) => c.id === 2).t.x);
+    comprobar(Math.abs(xB - 0.137) < 1e-12, `una guía en x = 0,137 atrae el centro soltado a 3 px (x = ${xB}; 1 px = ${(1 / zoom).toFixed(4)})`);
+    // reglas: sacar una guía y devolverla a la regla
+    await s.keyboard.press('Escape'); await s.keyboard.down('Shift'); await s.keyboard.press('r'); await s.keyboard.up('Shift');
+    const rY = await s.$eval('#reglaY', (x) => { const r = x.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    await s.mouse.move(...rY); await s.mouse.down(); await s.mouse.move(rY[0] + 200, rY[1], { steps: 5 }); await s.mouse.up();
+    comprobar((await s.evaluate(() => window.editor.doc().guias.x.length)) === 2, '⇧R y arrastrar desde la regla izquierda saca una guía vertical');
+    const g = await s.$eval('[data-guia="x,1"]', (x) => { const r = x.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    await s.mouse.move(...g); await s.mouse.down(); await s.mouse.move(rY[0], g[1], { steps: 5 }); await s.mouse.up();
+    comprobar((await s.evaluate(() => window.editor.doc().guias.x.length)) === 1, 'devuelta a la regla, se borra');
+
+    // campos con operaciones
+    await s.click('#capas li[data-id="1"] .nom');
+    const campo = async (q, v) => s.$eval(`[data-p=${q}]`, (i, v) => { i.value = v; i.dispatchEvent(new Event('change', { bubbles: true })); }, v);
+    const t = () => s.evaluate(() => window.editor.doc().capas.find((c) => c.id === 1).t);
+    const x0 = (await t()).x;
+    await campo('x', '+0,01');
+    comprobar((await t()).x === x0 + 0.01, `«+0,01» en X suma exactamente 0,01 (${x0} → ${(await t()).x})`);
+    await campo('x', '0,2*3');
+    comprobar((await t()).x === 0.2 * 3, '«0,2*3» da 0,2 × 3');
+    await campo('x', 'alert(1)');
+    comprobar((await t()).x === 0.2 * 3, 'y «alert(1)» no cambia nada');
+    await campo('w', '50%');
+    comprobar(Math.abs((await t()).sx - 0.5) < 1e-12, '«50%» en el ancho lo deja a la mitad');
+    comprobar(await s.evaluate(() => [window.editor.evaluar('(1+2)/4', 0), window.editor.evaluar('x', 0), window.editor.evaluar('*2', 3)].join()) === '0.75,NaN,6',
+      'el evaluador: paréntesis, rechaza letras y *2 sobre lo actual');
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {
