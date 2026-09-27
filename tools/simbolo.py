@@ -197,6 +197,19 @@ def redondear_planta(geo, r, r_entrante=None, esquina=None):
     return geo.buffer(-r, quad_segs=q).buffer(r, quad_segs=q).buffer(re_, quad_segs=q).buffer(-re_, quad_segs=q)
 
 
+PERDIDA_MAX = 0.03  # un trazo que pierde más de esto al redondear es demasiado fino para el canto
+
+
+def area_perdida(original, acabada):
+    """Lo que el redondeo en planta se come de la pieza que más pierde (fracción de su área).
+    Por pieza y no en total: un trazo fino junto a una forma grande se perdía en la media."""
+    peor = 0.0
+    for p in lista(original):
+        if p.area > 0:
+            peor = max(peor, 1 - acabada.intersection(p).area / p.area)
+    return peor
+
+
 def suavizar(m):
     """Normales suaves en curvas y canto redondeado; aristas vivas en las esquinas."""
     # facet_minarea=None: sin eso trimesh sombrea plano las caras grandes (pared, frente)

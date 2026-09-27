@@ -37,6 +37,10 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 .rejilla label{display:flex;flex-direction:column;gap:2px;color:var(--tenue);font-size:11px}
 .rejilla label.ancho{grid-column:1/-1}
 .nota{color:var(--tenue);padding:0 12px 8px;font-size:11px}
+.revision{list-style:none;margin:0;padding:0 12px 10px;font-size:11px}
+.revision .pasa{color:#7fd08a}
+.revision .falla{color:#ff7b6b;font-weight:600}
+.revision .archivo{color:var(--tenue)}
 #dos,#tres{position:relative;min-width:0;min-height:0}
 #dos{border-right:1px solid var(--borde)}
 #lienzo{position:absolute;inset:0;width:100%;height:100%;display:block;background:var(--fondo);touch-action:none;transform-origin:0 0}
@@ -569,6 +573,9 @@ function panel() {
       .map(([v, n]) => `<option value="${v}" ${tipoSimetria() === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
     <label>Manda<select data-s="lado" ${tipoSimetria() ? '' : 'disabled'}>${ladosSimetria()}</select></label></div>
     <p class="nota">Unidades: diámetro del símbolo = 1. Grosor y canto de la galería: ${ajustesBase.fondo} y ${ajustesBase.bisel}.</p>`;
+  if (generado) html += `<h3>Última generación · ${esc(generado.nombre)} · ${generado.aprobado ? 'APROBADO' : 'RECHAZADO'}</h3>
+    <ul class="revision">${generado.comprobaciones.map((c) => `<li class="${c.pasa ? 'pasa' : 'falla'}" title="${esc(c.valor)}">${c.pasa ? 'PASA' : 'FALLA'} · ${esc(c.que)}</li>`).join('')}
+    ${generado.archivos.map((f) => `<li class="archivo">${esc(f)}</li>`).join('')}</ul>`;
   $('#props').innerHTML = html;
 }
 
@@ -1490,7 +1497,7 @@ addEventListener('pagehide', () => {
   const enviado = { ...doc, capas: doc.capas.map((c) => (base.get(c.id) === JSON.stringify(c.anillos) ? { ...c, anillos: '=' } : c)) };
   navigator.sendBeacon('/api/guardar', JSON.stringify({ nombre, doc: enviado, parche }));
 });
-let generando = false;
+let generando = false, generado = null;  // la última generación: sus comprobaciones van en el panel
 $('#bGenerar').addEventListener('click', async () => {
   if (!nombreValido()) return;
   estado('Generando GLB…');
@@ -1498,8 +1505,14 @@ $('#bGenerar').addEventListener('click', async () => {
   const r = await api('/api/generar', { nombre, doc, capas: capasMundo() }).finally(() => { generando = false; });
   if (r.error) return estado(r.error, true);
   yaGuardado();
-  estado(`glb/${nombre}.glb · ${r.piezas} pieza(s) · ${r.triangulos.toLocaleString('es')} triángulos · ` +
-    `${r.estanca ? 'malla cerrada' : '<b>malla abierta</b>'} · <a href="visor.html?s=${nombre}" target="_blank">visor</a>`, !r.estanca);
+  generado = { nombre, ...r }; panel();
+  // aprobado: las tres versiones, y el visor abre la web; rechazado: solo la detallada, para mirarla
+  const web = r.archivos.find((f) => f.startsWith('glb/web/'));
+  estado(r.aprobado
+    ? `APROBADO · ${r.archivos.length} archivos (${r.triangulos.toLocaleString('es')} triángulos la detallada)` +
+      `${r.aviso_web ? ` · sin versión web: ${esc(r.aviso_web)}` : ''} · <a href="visor.html?s=${web ? web.slice(4, -4) : nombre}" target="_blank">visor</a>`
+    : `<b>RECHAZADO</b> · solo glb/${nombre}.glb, para mirarlo; ni ligera ni web · ` +
+      `falla: ${r.comprobaciones.filter((c) => !c.pasa).map((c) => c.que).join(', ')}`, !r.aprobado);
   new GLTFLoader().load(`glb/${nombre}.glb?v=${Date.now()}`, (g) => poner(g.scene, `glb/${nombre}.glb — acabado exacto`));
 });
 

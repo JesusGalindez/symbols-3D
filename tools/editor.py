@@ -13,6 +13,8 @@ import argparse
 import json
 import math
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -22,6 +24,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import shapely
+import trimesh
 from shapely import affinity
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 from shapely.ops import polygonize, unary_union
@@ -119,16 +122,27 @@ def forma_capa(anillos):
     return forma
 
 
-def geometria(capas, bisel, simetria=None):
-    """Capas en coordenadas del mundo, de abajo arriba: unir suma, restar quita lo de debajo."""
+def planta(capas, simetria=None):
+    """Capas en coordenadas del mundo, de abajo arriba: unir suma, restar quita lo de debajo.
+    Sin el redondeo del acabado (con él, geometria())."""
     geo = Polygon()
     for c in capas:
         forma = shapely.set_precision(forma_capa(c["anillos"]), PRECISION)
         geo = geo.union(forma) if c["op"] == "unir" else geo.difference(forma)
     geo = simetrizar(geo, simetria)
-    geo = unary_union([p for p in s.lista(geo.buffer(0)) if p.area > 1e-7])
-    # mismo acabado en planta que redibujar.py; sobre una forma ya redondeada no cambia nada
-    return s.redondear_planta(geo, bisel * s.DIAMETRO * 1.3, bisel * s.DIAMETRO * 0.6)
+    return unary_union([p for p in s.lista(geo.buffer(0)) if p.area > 1e-7])
+
+
+def acabar(geo, bisel, esquina=None):
+    """Mismo acabado en planta que redibujar.py; sobre una forma ya redondeada no cambia nada.
+    Sin piezas de área nula: con esquinas de 4 segmentos (la ligera), xi-doble simétrico
+    dejaba una en el eje y el canto (simbolo.inset) no la aguantaba."""
+    g = s.redondear_planta(geo, bisel * s.DIAMETRO * 1.3, bisel * s.DIAMETRO * 0.6, esquina)
+    return unary_union([p for p in s.lista(g) if p.area > 1e-7])
+
+
+def geometria(capas, bisel, simetria=None):
+    return acabar(planta(capas, simetria), bisel)
 
 
 def simetrizar(geo, simetria):
@@ -328,24 +342,81 @@ def a_listas(geo, decimales=6):
     return [[r(p.exterior), *map(r, p.interiors)] for p in s.lista(geo) if not p.is_empty]
 
 
-def malla(nombre, doc, capas, carpeta):
+LIGERA = {"pasos": 3, "esquina": 4}  # como --ligera de redibujar.py y letras.py
+
+
+def malla(nombre, doc, capas, carpeta, ligera=False, base=None):
     """Capas -> carpeta/glb/<nombre>.glb con el acabado de la galería. La usan «Generar» y
-    la vista 3D del editor (/api/previa): lo que se ve es exactamente lo que se genera."""
+    la vista 3D del editor (/api/previa): lo que se ve es exactamente lo que se genera.
+    base: la planta ya combinada, si se tiene (generar la reutiliza para la ligera)."""
     a = doc["ajustes"]
-    geo = geometria(capas, float(a["bisel"]), doc.get("simetria"))
+    base = planta(capas, doc.get("simetria")) if base is None else base
+    geo = acabar(base, float(a["bisel"]), LIGERA["esquina"] if ligera else None)
     if geo.is_empty:
         raise ValueError("no queda ninguna forma que generar")
     for sub in ("glb", "svg"):
         (Path(carpeta) / sub).mkdir(parents=True, exist_ok=True)
     return s.exportar(geo, nombre, fondo=float(a["fondo"]), bisel=float(a["bisel"]),
-                      color=[float(v) for v in a["color"]], carpeta=carpeta)
+                      color=[float(v) for v in a["color"]], pasos=LIGERA["pasos"] if ligera else None,
+                      carpeta=carpeta)
+
+
+def revisar(glb, base, bisel):
+    """Lo que se exige a lo editado, sin imagen con que compararlo: la revisión de malla de
+    verificar.py y el aviso de trazo fino de letras.py. [(qué, pasa, valor)]"""
+    import verificar
+    escena = trimesh.load(glb, process=False)
+    geos = list(escena.geometry.values())
+    r = verificar.revisar_malla(geos[0] if len(geos) == 1 else trimesh.util.concatenate(geos))
+    perdida = s.area_perdida(base, acabar(base, bisel))
+    return [("trazo fino", perdida <= s.PERDIDA_MAX, f"el redondeo se come el {perdida:.1%} de la pieza que más pierde (máx. {s.PERDIDA_MAX:.0%})"),
+            ("malla cerrada", r["estanca"], str(r["estanca"])),
+            ("canto en todas las piezas", r["piezas_sin_canto"] == 0, f"{r['piezas_sin_canto']} sin canto"),
+            ("normal del frente exacta", r["normal_frente_ok"], str(r["normal_frente_ok"])),
+            ("normal del dorso exacta", r["normal_dorso_ok"], str(r["normal_dorso_ok"])),
+            ("material", r["material"] == "laca", str(r["material"]))]
+
+
+def web(origen, destino):
+    """La versión web (meshopt), con el mismo comando que el README. None si salió bien;
+    si no, por qué (sin npx, o sin internet la primera vez)."""
+    npx = shutil.which("npx")
+    if not npx:
+        return "no está npx (Node.js)"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        r = subprocess.run([npx, "-y", "@gltf-transform/cli@4", "optimize", str(origen), str(destino),
+                            "--compress", "meshopt", "--simplify", "false"], capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return "gltf-transform no terminó en 3 min"
+    return None if r.returncode == 0 and destino.exists() else (r.stderr.strip().splitlines() or ["falló"])[-1]
 
 
 def generar(nombre, doc, capas):
+    """Las tres versiones de la galería: detallada, ligera y web. Si la detallada no pasa la
+    revisión, solo queda ella (para poder mirarla) y ni ligera ni web: nada se entrega
+    rechazado. Las de una generación anterior con ese nombre se borran, para que no
+    quede una ligera vieja junto a una detallada nueva."""
     if protegido(nombre):
         raise ValueError(f"glb/{nombre}.glb no salió del editor: elige otro nombre")
     guardar(nombre, doc)
-    return malla(nombre, doc, capas, SALIDA)
+    base = planta(capas, doc.get("simetria"))
+    info = malla(nombre, doc, capas, SALIDA, base=base)
+    comprobaciones = revisar(SALIDA / "glb" / f"{nombre}.glb", base, float(doc["ajustes"]["bisel"]))
+    aprobado = all(ok for _, ok, _ in comprobaciones)
+    ligera = f"{nombre}-ligera"
+    rutas = {"ligera": SALIDA / "glb" / f"{ligera}.glb", "web": SALIDA / "glb" / "web" / f"{ligera}.glb"}
+    for ruta in [*rutas.values(), SALIDA / "svg" / f"{ligera}.svg"]:
+        ruta.unlink(missing_ok=True)
+    archivos, aviso_web = [f"glb/{nombre}.glb"], None
+    if aprobado:
+        malla(ligera, doc, capas, SALIDA, ligera=True, base=base)
+        archivos.append(f"glb/{ligera}.glb")
+        aviso_web = web(rutas["ligera"], rutas["web"])
+        if aviso_web is None:
+            archivos.append(f"glb/web/{ligera}.glb")
+    return {**info, "aprobado": aprobado, "archivos": archivos, "aviso_web": aviso_web,
+            "comprobaciones": [{"que": q, "pasa": bool(ok), "valor": v} for q, ok, v in comprobaciones]}
 
 
 def previa(doc, capas):

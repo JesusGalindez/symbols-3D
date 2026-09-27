@@ -457,3 +457,20 @@ def test_cortar_shou_cruz_en_curvas_sigue_aprobado(salida):
     editor.generar("sugerida-curvas", doc, capas)
     codigo, v = verificar(salida / "glb" / "sugerida-curvas.glb", RAIZ / "fuentes" / "shou-cruz.png")
     assert codigo == 0 and v["aprobado"], v
+
+
+def test_generar_rechaza_un_trazo_fino(salida):
+    """Criterio de F5: un trazo de 0,01 de ancho (el canto se lo come entero) → RECHAZADO y
+    solo la detallada; sin él, APROBADO y las tres versiones. Por pieza: junto a un cuadrado
+    grande, el trazo fino apenas mueve la pérdida total (la de letras.py no lo veía)."""
+    cuadro = lambda x, y, w, h: {"op": "unir", "anillos": [[[x - w / 2, y - h / 2], [x + w / 2, y - h / 2],  # noqa: E731
+                                                            [x + w / 2, y + h / 2], [x - w / 2, y + h / 2]]]}
+    doc = {"version": 2, "capas": [], "ajustes": dict(editor.AJUSTES)}
+    capas = [cuadro(0, 0, 0.6, 0.6), cuadro(0, 0.4, 0.3, 0.01)]
+    base = editor.planta(capas)
+    assert 1 - editor.acabar(base, s.BISEL).area / base.area < s.PERDIDA_MAX  # en total no se ve
+    r = editor.generar("fino", doc, capas)
+    assert not r["aprobado"] and [c["que"] for c in r["comprobaciones"] if not c["pasa"]] == ["trazo fino"]
+    assert r["archivos"] == ["glb/fino.glb"] and not (salida / "glb" / "fino-ligera.glb").exists()
+    r = editor.generar("fino", doc, capas[:1])
+    assert r["aprobado"] and len(r["archivos"]) == 3 and r["aviso_web"] is None

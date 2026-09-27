@@ -90,8 +90,17 @@ try {
   await p.click('#bGenerar');
   await p.waitForFunction(() => !/Generando/.test(document.querySelector('#estado').textContent), { timeout: 120000 });
   const est = await p.$eval('#estado', (x) => x.textContent);
-  comprobar(/malla cerrada/.test(est), `generar: ${est}`);
-  comprobar(existsSync(join(e.salida, 'glb', 'prueba-ui.glb')), 'el GLB está en la carpeta temporal, no en glb/');
+  comprobar(/APROBADO/.test(est), `generar: ${est}`);
+  const tres = ['glb/prueba-ui.glb', 'glb/prueba-ui-ligera.glb', 'glb/web/prueba-ui-ligera.glb'];
+  comprobar(tres.every((f) => existsSync(join(e.salida, f))), 'las tres versiones (detallada, ligera y web) están en la carpeta temporal, no en glb/');
+  comprobar(await p.$$eval('.revision .pasa', (l) => l.length) === 6, 'y el panel lista las 6 comprobaciones en PASA');
+  {
+    const v = await e.chrome.newPage();
+    await v.goto(e.url.replace('editor.html', 'visor.html?s=web/prueba-ui-ligera'));
+    await v.waitForFunction(() => document.body.dataset.listo === '1', { timeout: 30000 });
+    comprobar(true, 'el visor carga la versión web (meshopt)');
+    await v.close();
+  }
   await p.waitForFunction(() => /acabado exacto/.test(document.querySelector('#etiqueta3d').textContent), { timeout: 20000 });
   comprobar(true, 'la vista 3D muestra el GLB generado');
 
@@ -456,6 +465,29 @@ try {
     const despues = await area();
     comprobar(Math.abs(despues - antes) < 1e-5, `y la forma sigue igual (área ${antes.toFixed(6)} → ${despues.toFixed(6)})`);
     await s.close();
+  }
+
+  // F5: un trazo de 0,01 de ancho no aguanta el canto → RECHAZADO: solo la detallada, para
+  // mirarla, y fuera la ligera y la web de una generación anterior que sí pasó
+  {
+    const capa = (id, nombre, [x, y, w, h], visible = true) => ({ id, nombre, op: 'unir', visible, t: { x, y, r: 0, sx: 1, sy: 1 },
+      anillos: [[[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map((p) => ({ p, ent: null, sal: null, tipo: 'vivo' }))] });
+    writeFileSync(join(e.salida, 'editor', 'fino.json'), JSON.stringify({ version: 2, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      capas: [capa(1, 'Cuadrado', [0, 0, 0.4, 0.4]), capa(2, 'Trazo fino', [0, 0.35, 0.3, 0.01], false)] }));
+    const { p: f } = await abrirEditor(e.chrome, e.url, 'fino');
+    const generarYEsperar = async () => {
+      await f.click('#bGenerar');
+      await f.waitForFunction(() => !/Generando/.test(document.querySelector('#estado').textContent), { timeout: 120000 });
+      return f.$eval('#estado', (x) => x.textContent);
+    };
+    const hay = (n) => existsSync(join(e.salida, n));
+    comprobar(/APROBADO/.test(await generarYEsperar()) && hay('glb/fino-ligera.glb') && hay('glb/web/fino-ligera.glb'), 'con el trazo fino oculto: APROBADO y tres versiones');
+    await f.click('#capas li[data-id="2"] .ojo');
+    const est = await generarYEsperar();
+    comprobar(/RECHAZADO/.test(est) && /trazo fino/.test(est), `con el trazo de 0,01 visible: ${est}`);
+    comprobar(hay('glb/fino.glb') && !hay('glb/fino-ligera.glb') && !hay('glb/web/fino-ligera.glb'), 'solo queda la detallada: la ligera y la web de antes se borran');
+    comprobar(await f.$eval('.revision .falla', (x) => x.textContent) === 'FALLA · trazo fino', 'y el panel marca la comprobación que falla');
+    await f.close();
   }
 
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de

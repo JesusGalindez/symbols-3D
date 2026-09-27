@@ -472,6 +472,19 @@ lo carga; el rótulo pasa solo a «exacto» tras dejar de editar.
 **Tarea de usuario (3 min):** generar la variante de F1 en las tres versiones y abrir
 la web en el visor.
 
+**Hecho el 2026-09-27.** «Generar» escribe detallada, ligera (`pasos=3`, esquinas de 4
+segmentos) y web (`npx -y @gltf-transform/cli@4 optimize … --compress meshopt`, 4 s; si no
+hay npx o internet la primera vez, lo dice y quedan dos). Panel «Última generación» con
+las 6 comprobaciones y los archivos. Sobre lo previsto:
+- **Trazo fino por pieza, no en total** (`simbolo.area_perdida`, también en `letras.py`):
+  un trazo de 0,01 junto a un cuadrado de 0,6 perdía < 3 % del total y no se veía.
+  Límite: un trazo fino *pegado* a una pieza grande sigue sin verse (es la misma pieza).
+- **Al generar se borran la ligera y la web de una generación anterior** con ese nombre:
+  si no, un RECHAZADO dejaba una ligera vieja junto a una detallada nueva.
+- **Piezas de área nula fuera tras el acabado:** con esquinas de 4 segmentos, xi-doble
+  simétrico dejaba una en el eje y el canto fallaba (lo cazó `test_simetria_*`).
+- El 3D exacto en segundo plano ya estaba (F2, `/api/previa`).
+
 ---
 
 ## F6 · Pulido  (1 sesión)

@@ -135,9 +135,9 @@ def main():
         # referencia: el contorno exacto de la fuente, sin el redondeo del acabado
         silueta_png(original, s.RAIZ / "fuentes" / f"{nombre}.png")
         g = acabar(original)
-        perdido = 1 - g.area / original.area
-        if perdido > 0.03:
-            print(f"aviso {nombre}: el redondeo se comió el {perdido:.0%} del área; trazos "
+        perdido = s.area_perdida(original, g)
+        if perdido > s.PERDIDA_MAX:
+            print(f"aviso {nombre}: el redondeo se comió el {perdido:.0%} de una pieza; trazos "
                   "demasiado finos para el canto, prueba un estilo más grueso", file=sys.stderr)
         info = s.exportar(g, nombre)
         print(json.dumps({"nombre": nombre, **info}, ensure_ascii=False))
