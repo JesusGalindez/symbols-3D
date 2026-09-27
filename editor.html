@@ -27,6 +27,9 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #capas li:hover{background:#353535}
 #capas li.sel{background:#1c4a70}
 #capas li.oculta .nom{opacity:.45}
+#capas .candado{background:none;border:0;padding:0 2px;color:var(--tenue);visibility:hidden}
+#capas li:hover .candado,#capas li.bloqueada .candado{visibility:visible}
+#lienzo .capa.bloqueada{pointer-events:none}
 #capas li{user-select:none}
 #capas li.hueco-antes{box-shadow:inset 0 2px 0 var(--acento)}
 #capas li.hueco-despues{box-shadow:inset 0 -2px 0 var(--acento)}
@@ -153,13 +156,17 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <dt>Arrastrar en vacío</dt><dd>Recuadro: lo que toca</dd><dt>⌘A</dt><dd>Todas</dd><dt>Esc</dt><dd>Salir de nodos, soltar la selección</dd></dl>
   <h4>Edición</h4><dl><dt>Flechas</dt><dd>Empujar 0,001 (⇧: 0,01)</dd><dt>⌘D · Supr</dt><dd>Duplicar · borrar</dd>
     <dt>⌘Z · ⇧⌘Z</dt><dd>Deshacer · rehacer (con la selección)</dd><dt>Arrastrar en la lista</dt><dd>Reordenar capas</dd>
+    <dt>⌘C · ⌘X · ⌘V</dt><dd>Copiar · cortar · pegar (también un SVG copiado de Figma)</dd><dt>⇧⌘V</dt><dd>Pegar en su sitio</dd>
+    <dt>⌥ + arrastrar</dt><dd>Duplicar moviendo (luego ⌘D repite el desplazamiento)</dd><dt>⇧H · ⇧V</dt><dd>Voltear en horizontal · en vertical</dd>
     <dt>⌘S</dt><dd>Guardar (también se guarda solo)</dd></dl>
+  <h4>Capas</h4><dl><dt>⇧⌘L</dt><dd>Bloquear (no se elige en el lienzo)</dd><dt>⇧⌘H</dt><dd>Mostrar u ocultar</dd>
+    <dt>⌘R</dt><dd>Renombrar</dd><dt>Tab · ⇧Tab</dt><dd>La capa de encima · la de debajo</dd></dl>
   <h4>Nodos</h4><dl><dt>Doble clic en el borde</dt><dd>Añadir un nodo</dd><dt>Doble clic en un nodo</dt><dd>Esquina ↔ curva</dd>
     <dt>⌥ + tirador</dt><dd>Separar los tiradores</dd><dt>Supr</dt><dd>Borrar el nodo</dd></dl>
   <h4>Precisión</h4><dl><dt>⇧ al mover</dt><dd>Un solo eje</dd><dt>⇧ al girar</dt><dd>De 15° en 15°</dd>
     <dt>⇧ al escalar</dt><dd>Con proporción</dd><dt>⌘ al arrastrar</dt><dd>Sin imán</dd></dl>
   <h4>Vista</h4><dl><dt>Rueda</dt><dd>Desplazar</dd><dt>⌘ + rueda · pellizco</dt><dd>Zoom</dd><dt>Espacio + arrastrar</dt><dd>Mover el lienzo</dd>
-    <dt>⇧1 · ⇧0</dt><dd>Ajustar a lo visible (o a la selección) · 100 %</dd></dl>
+    <dt>⇧1 · ⇧2 · ⇧0</dt><dd>Ajustar a todo · a la selección · 100 %</dd><dt>⌘+ · ⌘−</dt><dd>Acercar · alejar</dd></dl>
   <h4>Archivos</h4><dl><dt>Abrir → Importar SVG…</dt><dd>Un logotipo con sus curvas, una capa por figura</dd>
     <dt>SVG</dt><dd>Exportar el diseño con sus curvas</dd><dt>Generar GLB</dt><dd>Detallada, ligera y web, con su revisión</dd>
     <dt>? · Esc</dt><dd>Abrir y cerrar esta ayuda</dd></dl>
@@ -329,7 +336,7 @@ function dibujar() {
   let capas = '';
   let costuras = '';
   for (const c of doc.capas) if (c.visible) {
-    capas += `<path class="capa ${c.op}" data-id="${c.id}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>`;
+    capas += `<path class="capa ${c.op}${c.bloqueada ? ' bloqueada' : ''}" data-id="${c.id}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>`;
     if (c.costuras?.length) costuras += `<path class="costura" data-costura="${c.id}" transform="${marcoCapa(c.t)}" d="${c.costuras.map((l) => 'M' + l.map((q) => q.join(' ')).join('L')).join('')}"/>`;
   }
   lienzo.innerHTML = `<g id="mundo" transform="${marcoMundo()}">
@@ -349,15 +356,18 @@ function refrescar(c) {
 }
 // 100 %: el diámetro 1 ocupa el 80 % del lado menor, centrado en el origen (la vista al abrir)
 function vistaInicial() { const [w, h] = tam(); Object.assign(vista, { cx: 0, cy: 0, zoom: Math.min(w, h) * 0.8 }); }
-// ajustar: lo visible (o la selección, si la hay) llena el 80 % del lienzo
-function ajustarVista() {
-  const cs = (selec.length ? capasSel() : doc.capas).filter((c) => c.visible), pts = cs.flatMap((c) => anillosMundo(c).flat());
+// ajustar (como Figma): ⇧1 todo lo visible, ⇧2 la selección; llena el 80 % del lienzo
+function ajustarVista(soloSel) {
+  const cs = (soloSel ? capasSel() : doc.capas).filter((c) => c.visible), pts = cs.flatMap((c) => anillosMundo(c).flat());
   if (!pts.length) return;
   const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]), [w, h] = tam();
   const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
   Object.assign(vista, { cx: (Math.min(...xs) + Math.max(...xs)) / 2, cy: (Math.min(...ys) + Math.max(...ys)) / 2,
     zoom: Math.min(50000, Math.max(50, 0.8 * Math.min(w / (bw || 1e-3), h / (bh || 1e-3)))) });
   vistaCambiada();
+}
+function zoomPaso(k) {  // ⌘+ / ⌘−: ×2 o ÷2, centrado en el centro de la vista
+  vista.zoom = Math.min(50000, Math.max(50, vista.zoom * k)); vistaCambiada();
 }
 function vistaCambiada() { $('#mundo')?.setAttribute('transform', marcoMundo()); sobre(); }
 
@@ -557,10 +567,11 @@ async function pedirExacta() {
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 function capasUI() {
   $('#capas').innerHTML = [...doc.capas].reverse().map((c) => `
-    <li data-id="${c.id}" class="${selec.includes(c.id) ? 'sel' : ''} ${c.visible ? '' : 'oculta'}">
+    <li data-id="${c.id}" class="${selec.includes(c.id) ? 'sel' : ''} ${c.visible ? '' : 'oculta'} ${c.bloqueada ? 'bloqueada' : ''}">
       <button class="ojo" data-accion="ojo" title="Mostrar u ocultar">${c.visible ? '◉' : '○'}</button>
       <span class="op" title="${c.op === 'unir' ? 'Une' : 'Resta'}">${c.op === 'unir' ? '＋' : '−'}</span>
-      <span class="nom">${esc(c.nombre)}</span></li>`).join('');
+      <span class="nom">${esc(c.nombre)}</span>
+      <button class="candado" data-accion="candado" title="Bloquear (⇧⌘L)">${c.bloqueada ? '🔒' : '🔓'}</button></li>`).join('');
 }
 const num = (v, d = 3) => Number(v.toFixed(d));
 const tipoSimetria = () => { const S = doc.simetria; return S?.lr && S?.ab ? 'doble' : S?.lr ? 'lr' : S?.ab ? 'ab' : ''; };
@@ -667,7 +678,7 @@ $('#props').addEventListener('click', (e) => {
 let arrastreLista = null, trasArrastre = false;
 $('#capas').addEventListener('pointerdown', (e) => {
   const li = e.target.closest('li');
-  if (!li || e.button !== 0 || e.target.closest('.ojo, input')) return;
+  if (!li || e.button !== 0 || e.target.closest('.ojo, .candado, input')) return;
   trasArrastre = false;
   arrastreLista = { id: Number(li.dataset.id), y: e.clientY, activo: false, destino: null };
 });
@@ -703,20 +714,22 @@ $('#capas').addEventListener('click', (e) => {
   if (!li) return;
   const c = doc.capas.find((x) => x.id === Number(li.dataset.id));
   if (e.target.dataset.accion === 'ojo') { c.visible = !c.visible; commit(); return; }
+  if (e.target.dataset.accion === 'candado') { bloquear([c]); return; }
   if (e.shiftKey) selec = selec.includes(c.id) ? selec.filter((id) => id !== c.id) : [...selec, c.id];  // ⇧ suma o quita
   else if (selec.length !== 1 || selec[0] !== c.id) selec = [c.id];
   nodos = false; nodoSel = null;
   todo();
 });
-$('#capas').addEventListener('dblclick', (e) => {
-  const nom = e.target.closest('.nom'); if (!nom) return;
-  const c = capaSel(); if (!c) return;  // con ⇧ + doble clic quedan varias: no hay una que renombrar
+$('#capas').addEventListener('dblclick', (e) => { if (e.target.closest('.nom')) renombrar(); });
+function renombrar() {
+  const c = capaSel(), nom = c && $(`#capas li[data-id="${c.id}"] .nom`);
+  if (!nom) return;  // con varias elegidas no hay una que renombrar
   nom.innerHTML = `<input value="${esc(c.nombre)}">`;
   const inp = nom.firstChild; inp.focus(); inp.select();
   const fin = () => { c.nombre = inp.value.trim() || c.nombre; commit(); };
   inp.addEventListener('blur', fin, { once: true });
   inp.addEventListener('keydown', (k) => { if (k.key === 'Enter') inp.blur(); if (k.key === 'Escape') { inp.value = c.nombre; inp.blur(); } });
-});
+}
 
 // ---------- historia
 function commit() {
@@ -813,12 +826,12 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
     else if (selec.includes(id) && selec.length > 1) alSoltar = [id];
     else selec = [id];
     if (id !== unica) { nodos = false; nodoSel = null; }
-    arrastre = { tipo: 'mover', m0: m, ...grupo(), abreNodos, alSoltar };
+    arrastre = { tipo: 'mover', m0: m, ...grupo(), abreNodos, alSoltar, alt: e.altKey };
   } else {  // en vacío: recuadro de selección (con ⇧, suma a la que hay)
     const base = e.shiftKey ? [...selec] : [];
     selec = base; nodos = false; nodoSel = null;
     arrastre = { tipo: 'recuadro', a: m, b: m, base, x: e.clientX, y: e.clientY,
-      mundo: doc.capas.filter((k) => k.visible).map((k) => ({ id: k.id, W: anillosMundo(k), b: cajaReal(k) })) };
+      mundo: doc.capas.filter((k) => k.visible && !k.bloqueada).map((k) => ({ id: k.id, W: anillosMundo(k), b: cajaReal(k) })) };
   }
   todo();
 });
@@ -859,6 +872,14 @@ addEventListener('pointermove', (e) => {
     const nueva = [...A.base, ...tocadas.filter((id) => !A.base.includes(id))];
     if (nueva.join() !== selec.join()) { selec = nueva; capasUI(); pedirPanel(); }
     sobre(); return;
+  }
+  if (A.tipo === 'mover' && A.alt && !A.duplicado) {
+    // ⌥ + arrastrar: al empezar a mover, lo que se arrastra son copias; los originales se
+    // quedan (y atraen al imán, como en Figma)
+    A.duplicado = true;
+    const copias = copiarCapas(A.capas, 0, 0);
+    ultimaCopia = { ids: copias.map((k) => k.id), origen: new Map(copias.map((k, i) => [k.id, [A.capas[i].t.x, A.capas[i].t.y]])) };
+    A.capas = copias; A.t0 = new Map(copias.map((k) => [k.id, { ...k.t }])); selec = ultimaCopia.ids; A.alSoltar = null;
   }
   if (A.tipo === 'mover') {
     let dx = m[0] - A.m0[0], dy = m[1] - A.m0[1];
@@ -1190,11 +1211,20 @@ addEventListener('keydown', (e) => {
   if (mod && k === 'z') { e.preventDefault(); irA(puntero + (e.shiftKey ? 1 : -1)); return; }
   if (mod && k === 'd') { e.preventDefault(); duplicar(); return; }
   if (mod && k === 's') { e.preventDefault(); guardar(); return; }
-  if (mod && k === 'a') { e.preventDefault(); selec = doc.capas.filter((x) => x.visible).map((x) => x.id); nodos = false; nodoSel = null; todo(); return; }
+  if (mod && k === 'a') { e.preventDefault(); selec = doc.capas.filter((x) => x.visible && !x.bloqueada).map((x) => x.id); nodos = false; nodoSel = null; todo(); return; }
+  if (mod && k === 'v') { pegarEnSitio = e.shiftKey; return; }  // el evento paste llega después
+  if (mod && e.shiftKey && k === 'l') { e.preventDefault(); bloquear(capasSel()); return; }
+  if (mod && e.shiftKey && k === 'h') { e.preventDefault(); const cs = capasSel(), ver = !cs.every((x) => x.visible); for (const x of cs) x.visible = ver; commit(); return; }
+  if (mod && k === 'r') { e.preventDefault(); renombrar(); return; }
+  if (mod && (e.key === '+' || e.key === '=' || e.key === '-')) { e.preventDefault(); zoomPaso(e.key === '-' ? 0.5 : 2); return; }
   if (mod) return;
   if (!$('#ayuda').hidden) { if (e.key === 'Escape' || e.key === '?') ayuda(false); return; }
   if (e.key === '?') { ayuda(true); return; }
-  if (e.shiftKey && e.code === 'Digit1') { ajustarVista(); return; }
+  if (e.shiftKey && e.code === 'Digit1') { ajustarVista(false); return; }
+  if (e.shiftKey && e.code === 'Digit2') { ajustarVista(true); return; }
+  if (e.shiftKey && k === 'h') { voltear(0); return; }
+  if (e.shiftKey && k === 'v') { voltear(1); return; }
+  if (e.key === 'Tab') { e.preventDefault(); hermana(e.shiftKey ? -1 : 1); return; }
   if (e.shiftKey && e.code === 'Digit0') { vistaInicial(); vistaCambiada(); return; }
   if (k === 'v') herr('mover');
   else if (k === 'r') herr('rect');
@@ -1366,16 +1396,53 @@ async function terminarCorte() {
   commit();
   estado(`Corte: ${r.cortes.length} capa(s) → ${piezas} piezas` + (r.atraviesa.length ? ' · y una costura en otra capa' : ''));
 }
-function duplicar() {
-  const cs = capasSel(); if (!cs.length) return;
-  selec = cs.map((c) => {
+// Duplicar (⌘D). Como Figma: si se duplica, se mueve la copia y se vuelve a duplicar, la
+// nueva copia repite ese mismo desplazamiento (filas equiespaciadas). ultimaCopia recuerda
+// las copias y dónde estaban sus originales; ⌥ + arrastrar también la deja.
+let ultimaCopia = null;
+function copiarCapas(cs, dx, dy) {
+  return cs.map((c) => {
     const copia = JSON.parse(JSON.stringify(c));
     Object.assign(copia, { id: idSig++, nombre: c.nombre + ' copia' });
-    copia.t.x += 0.02; copia.t.y -= 0.02;
+    copia.t.x += dx; copia.t.y += dy;
     doc.capas.splice(doc.capas.indexOf(c) + 1, 0, copia);
-    return copia.id;
+    return copia;
   });
+}
+function duplicar() {
+  const cs = capasSel(); if (!cs.length) return;
+  const U = ultimaCopia, repite = U && U.ids.length === cs.length && cs.every((c) => U.ids.includes(c.id));
+  const [dx, dy] = repite ? [cs[0].t.x - U.origen.get(cs[0].id)[0], cs[0].t.y - U.origen.get(cs[0].id)[1]] : [0.02, -0.02];
+  const copias = copiarCapas(cs, dx, dy);
+  ultimaCopia = { ids: copias.map((k) => k.id), origen: new Map(copias.map((k, i) => [k.id, [cs[i].t.x, cs[i].t.y]])) };
+  selec = ultimaCopia.ids;
   commit();
+}
+// ⇧H / ⇧V: voltear la selección respecto al centro de su caja. Sin hornear: el reflejo de
+// una capa girada r con escala (sx, sy) es la de giro −r y escala (−sx, sy), así que basta
+// con cambiar t (exacto: voltear dos veces deja los mismos números)
+function voltear(eje) {
+  const cs = capasSel().filter((c) => c.visible); if (!cs.length) return;
+  const B = cajaGrupo(cs), C = eje ? B[1] + B[3] : B[0] + B[2];  // el doble del centro
+  for (const c of cs) {
+    hornear(c);
+    if (eje) Object.assign(c.t, { y: C - c.t.y, r: -c.t.r, sy: -c.t.sy });
+    else Object.assign(c.t, { x: C - c.t.x, r: -c.t.r, sx: -c.t.sx });
+    if (c.t.r === 0) c.t.r = 0;  // sin −0 en el JSON
+  }
+  commit();
+}
+function bloquear(cs) {  // ⇧⌘L: una bloqueada no se elige en el lienzo ni con el recuadro
+  if (!cs.length) return;
+  const b = !cs.every((c) => c.bloqueada);
+  for (const c of cs) { if (b) c.bloqueada = true; else delete c.bloqueada; }
+  if (b) selec = selec.filter((id) => !cs.some((c) => c.id === id));
+  commit();
+}
+function hermana(d) {  // Tab / ⇧Tab: la capa de encima / debajo de la elegida
+  const n = doc.capas.length; if (!n) return;
+  const i = capaSel() ? doc.capas.indexOf(capaSel()) : d > 0 ? -1 : n;
+  selec = [doc.capas[(i + d + n) % n].id]; nodos = false; nodoSel = null; todo();
 }
 function borrarCapa() { doc.capas = doc.capas.filter((c) => !selec.includes(c.id)); selec = []; nodos = false; commit(); }
 function moverCapa(d) {
@@ -1392,6 +1459,70 @@ $('#bSubir').addEventListener('click', () => moverCapa(1));
 $('#bBajar').addEventListener('click', () => moverCapa(-1));
 $('#bDuplicar').addEventListener('click', duplicar);
 $('#bBorrar').addEventListener('click', () => selec.length && borrarCapa());
+// ---------- portapapeles
+// Copiar pone en el portapapeles un SVG de las capas (texto plano: lo lee Figma, Illustrator
+// o cualquier programa) con el JSON exacto de las capas dentro de <metadata>: al pegar en el
+// editor se recuperan tal cual (nodos, t, operación, nombres). Solo texto plano: funciona
+// en cualquier navegador y entre pestañas. Pegar un SVG que no es nuestro lo importa
+// (/api/importar) y lo añade al documento.
+let pegarEnSitio = false;
+function svgCapas(cs) {
+  const K = 1000, f = (x, y) => `${+(x * K).toFixed(3)} ${+(-y * K).toFixed(3)}`;
+  const trazo = (c) => nodosMundo(c).map((r) => 'M' + f(...r[0].p) + r.map((a, i) => {
+    const b = r[(i + 1) % r.length];
+    if (!a.sal && !b.ent) return 'L' + f(...b.p);
+    const c1 = a.sal ? [a.p[0] + a.sal[0], a.p[1] + a.sal[1]] : a.p, c2 = b.ent ? [b.p[0] + b.ent[0], b.p[1] + b.ent[1]] : b.p;
+    return `C${f(...c1)} ${f(...c2)} ${f(...b.p)}`;
+  }).join('') + 'Z').join('');
+  const B = unirCajas(cs.map(cajaReal)), m = 20;
+  const vb = [B[0] * K - m, -B[3] * K - m, (B[2] - B[0]) * K + 2 * m, (B[3] - B[1]) * K + 2 * m].map((v) => +v.toFixed(3));
+  const a = doc.ajustes, hex = '#' + new THREE.Color().setRGB(a.color[0], a.color[1], a.color[2], THREE.LinearSRGBColorSpace).getHexString();
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.join(' ')}" width="${vb[2]}" height="${vb[3]}">\n` +
+    `<metadata id="x-simbolos">${esc(JSON.stringify(cs))}</metadata>\n` +
+    cs.map((c) => `<path id="${esc(c.nombre)}" fill="${c.op === 'unir' ? hex : '#000'}" fill-rule="evenodd" d="${trazo(c)}"/>`).join('\n') + '\n</svg>\n';
+}
+function aPortapapeles(e) {
+  if (e.target.matches?.('input, select') || !capasSel().length) return false;
+  e.clipboardData.setData('text/plain', svgCapas(capasSel()));
+  e.preventDefault();
+  return true;
+}
+document.addEventListener('copy', (e) => { if (aPortapapeles(e)) estado(`Copiada(s) ${selec.length} capa(s)`); });
+document.addEventListener('cut', (e) => { if (aPortapapeles(e)) borrarCapa(); });
+document.addEventListener('paste', async (e) => {
+  if (e.target.matches?.('input, select')) return;
+  const texto = e.clipboardData.getData('text/plain'), enSitio = pegarEnSitio;
+  pegarEnSitio = false;
+  if (!/<svg[\s>]/.test(texto)) return;
+  e.preventDefault();
+  const meta = new DOMParser().parseFromString(texto, 'image/svg+xml').querySelector('metadata#x-simbolos');
+  let nuevas;
+  if (meta) {
+    nuevas = JSON.parse(meta.textContent);
+    // pegar encima de las originales (mismos nodos y sitio) las desplaza, salvo con ⇧⌘V
+    const igual = (c) => doc.capas.some((k) => JSON.stringify(k.anillos) === JSON.stringify(c.anillos) && k.t.x === c.t.x && k.t.y === c.t.y);
+    if (!enSitio && nuevas.some(igual)) for (const c of nuevas) { c.t.x += 0.02; c.t.y -= 0.02; }
+  } else {
+    let r;
+    try { r = await api('/api/importar', { nombre: 'pegado', svg: texto }); } catch { r = { error: 'sin respuesta del servidor' }; }
+    if (r.error) return estado(r.error, true);
+    nuevas = r.doc.capas;
+    if (doc.capas.length) {  // con capas ya: a diámetro 0,5 y en el centro de la vista
+      const k = 0.5, E = (v) => v && [v[0] * k, v[1] * k];
+      for (const c of nuevas) {
+        c.anillos = c.anillos.map((a) => a.map((n) => ({ ...n, p: E(n.p), ent: E(n.ent), sal: E(n.sal) })));
+        Object.assign(c.t, { x: c.t.x * k + vista.cx, y: c.t.y * k + vista.cy });
+      }
+    }
+  }
+  // encima de la capa elegida más alta (o arriba del todo), con ids nuevos
+  const arriba = Math.max(-1, ...capasSel().map((c) => doc.capas.indexOf(c)));
+  for (const c of nuevas) { c.id = idSig++; delete c.bloqueada; }
+  doc.capas.splice(arriba >= 0 ? arriba + 1 : doc.capas.length, 0, ...nuevas);
+  selec = nuevas.map((c) => c.id); nodos = false; nodoSel = null; herramienta = 'mover';
+  commit();
+  estado(`Pegada(s) ${nuevas.length} capa(s)${meta ? '' : ' de un SVG'}`);
+});
 function ayuda(ver) { $('#ayuda').hidden = !ver; }
 $('#bAyuda').addEventListener('click', () => ayuda($('#ayuda').hidden));
 $('#ayuda').addEventListener('click', (e) => { if (e.target.id === 'ayuda') ayuda(false); });

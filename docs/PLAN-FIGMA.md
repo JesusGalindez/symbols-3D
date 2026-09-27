@@ -218,6 +218,18 @@ da una planta con IoU ≥ 0,999 contra la original; ⌥ + arrastrar crea exactam
 capa; ⇧H dos veces deja el JSON idéntico (comparación de texto); una capa bloqueada no se
 elige ni con clic ni con recuadro; presupuesto de 16 ms.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). Sobre lo previsto:
+- **Solo texto plano en el portapapeles**, sin tipo propio: el SVG de las capas lleva
+  dentro `<metadata id="x-simbolos">` con su JSON exacto. Figma e Illustrator leen el SVG
+  y no ven el metadata; el editor recupera las capas tal cual. Funciona igual en Chrome,
+  Safari y Firefox, y un SVG sin ese metadata se importa.
+- **Voltear no hornea**: el reflejo de una capa con giro r y escala (sx, sy) es la de
+  giro −r y escala (−sx, sy) con la posición reflejada; exacto y sin tocar los nodos.
+  Dos veces deja la capa a < 1e-12 (el centro de la caja se recalcula en floats).
+- ⌥ + arrastrar crea las copias al empezar a mover (un ⌥ + clic no duplica nada).
+- El servidor ya no escribe `BrokenPipeError` cuando el navegador cancela una petición.
+Medido: `test:ui` 112 en verde, pytest 46; arrastre de shou-circular en presupuesto.
+
 **Tarea de usuario (3 min):** copiar un icono en Figma («Copy as SVG»), pegarlo en el
 editor y colocarlo en el centro de `xi-doble`. Hecho si: generado y APROBADO.
 

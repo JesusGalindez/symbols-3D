@@ -511,7 +511,7 @@ def previa(doc, capas):
 # al guardar.
 CAMPOS = {
     "doc": {"version", "origen", "capas", "ajustes", "simetria"},
-    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras"},
+    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada"},
     "nodo": {"p", "ent", "sal", "tipo"},
 }
 
@@ -666,6 +666,14 @@ class Manejador(SimpleHTTPRequestHandler):
         pass
 
 
+class Servidor(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # el navegador cancela peticiones que ya no le sirven (una /api/combinar vieja al
+        # seguir editando): el socket roto no es un error del servidor
+        if not isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            super().handle_error(request, client_address)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--puerto", type=int, default=8792)
@@ -673,4 +681,4 @@ if __name__ == "__main__":
     args = ap.parse_args()
     SALIDA = args.salida.resolve()
     print(f"Editor en http://localhost:{args.puerto}/editor.html", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", args.puerto), Manejador).serve_forever()
+    Servidor(("127.0.0.1", args.puerto), Manejador).serve_forever()

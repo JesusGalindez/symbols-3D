@@ -533,14 +533,16 @@ try {
     await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.up('Meta');
     comprobar((await s.$$eval('#capas li .nom', (l) => l.map((x) => x.textContent))).join() === o0.join(), 'y otro ⌘Z deshace el reordenado');
 
-    // ⇧1 ajusta lo visible al lienzo; ⇧0 vuelve al 100 %
+    // ⇧2 ajusta la selección al lienzo (⇧1, todo); ⇧0 vuelve al 100 %
     const escala = () => s.evaluate(() => { const [a] = window.editor.aCliente(0, 0), [b] = window.editor.aCliente(1, 0); return b - a; });
     await s.keyboard.press('Escape');
     const z0 = await escala();
     await s.click('#capas li:nth-child(3)');  // la más pequeña: el lóbulo
-    await s.keyboard.down('Shift'); await s.keyboard.press('Digit1'); await s.keyboard.up('Shift');
+    await s.keyboard.down('Shift'); await s.keyboard.press('Digit2'); await s.keyboard.up('Shift');
     const z1 = await escala();
-    comprobar(z1 > z0 * 2, `⇧1 con una capa elegida la ajusta al lienzo (zoom ×${(z1 / z0).toFixed(2)})`);
+    comprobar(z1 > z0 * 2, `⇧2 ajusta la capa elegida al lienzo (zoom ×${(z1 / z0).toFixed(2)})`);
+    await s.keyboard.down('Shift'); await s.keyboard.press('Digit1'); await s.keyboard.up('Shift');
+    comprobar(Math.abs(await escala() / z0 - 1) < 0.3, `⇧1 ajusta todo (zoom ×${(await escala() / z0).toFixed(2)})`);
     await s.keyboard.down('Shift'); await s.keyboard.press('Digit0'); await s.keyboard.up('Shift');
     comprobar(Math.abs(await escala() - z0) < 1e-6, '⇧0 vuelve al 100 %');
 
@@ -549,6 +551,93 @@ try {
     await s.keyboard.press('Escape');
     comprobar(await s.$eval('#ayuda', (x) => x.hidden) && (await s.evaluate(() => window.editor.seleccion().length)) === 1,
       'Esc lo cierra sin soltar la selección');
+    await s.close();
+  }
+
+  // G1: portapapeles (el SVG con el JSON de las capas dentro), pegar en su sitio, pegar un
+  // SVG de fuera, ⌥ + arrastrar, ⌘D que repite, voltear, bloquear y Tab
+  {
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'xi-doble');
+    const sel = () => s.evaluate(() => window.editor.seleccion());
+    const capas = () => s.evaluate(() => window.editor.doc().capas);
+    const copiar = (pg = s) => pg.evaluate(() => { const d = new DataTransfer(); document.dispatchEvent(new ClipboardEvent('copy', { clipboardData: d, bubbles: true })); return d.getData('text/plain'); });
+    const pegar = async (texto, pg = s) => {
+      const n = (await pg.evaluate(() => window.editor.doc().capas.length));
+      await pg.evaluate((t) => { const d = new DataTransfer(); d.setData('text/plain', t); document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: d, bubbles: true })); }, texto);
+      await pg.waitForFunction((n) => window.editor.doc().capas.length > n, { timeout: 10000 }, n);
+    };
+    const sinId = (cs) => JSON.stringify(cs.map(({ id, nombre, ...r }) => r));
+    await s.keyboard.down('Meta'); await s.keyboard.press('a'); await s.keyboard.up('Meta');
+    const originales = await capas(), texto = await copiar();
+    comprobar(/^<svg/.test(texto) && /x-simbolos/.test(texto) && (texto.match(/<path/g) ?? []).length === 2, 'copiar pone un SVG con las 2 capas y su JSON dentro');
+    const { p: otra } = await abrirEditor(e.chrome, e.url, 'shou-cruz');
+    await pegar(texto, otra);
+    const pegadas = (await otra.evaluate(() => window.editor.doc().capas)).slice(-2);
+    comprobar(sinId(pegadas) === sinId(originales), 'pegarlo en otra pestaña da las mismas capas (salvo ids y nombres)');
+    await otra.close();
+    await pegar(texto);
+    const desplazadas = (await capas()).slice(-2);
+    comprobar(desplazadas.every((c, i) => Math.abs(c.t.x - originales[i].t.x - 0.02) < 1e-12), 'pegar encima de las originales las desplaza 0,02');
+    await s.keyboard.down('Meta'); await s.keyboard.down('Shift'); await s.keyboard.press('v'); await s.keyboard.up('Shift'); await s.keyboard.up('Meta');
+    await pegar(texto);
+    const enSitio = (await capas()).slice(-2);
+    comprobar(enSitio.every((c, i) => JSON.stringify(c.t) === JSON.stringify(originales[i].t)), '⇧⌘V las pega en su sitio (t idéntico)');
+
+    // un SVG de fuera (el que exporta el editor de shou-cruz) en un documento vacío
+    const ext = await s.evaluate(async () => { const r = await fetch('/api/abrir?s=shou-cruz').then((x) => x.json());
+      const cs = r.doc.capas.map((c) => ({ ...c, anillos: c.anillos.map((a) => a.map((n) => ({ ...n, p: [n.p[0] + c.t.x, n.p[1] + c.t.y] }))) }));
+      return (await fetch('/api/svg', { method: 'POST', body: JSON.stringify({ capas: cs, color: [0.6, 0.05, 0.03, 1] }) }).then((x) => x.json())).svg; });
+    const { p: vacio } = await abrirEditor(e.chrome, e.url, 'xi-doble');
+    await vacio.select('#abrir', '+nuevo');
+    await vacio.waitForFunction(() => window.editor.doc().capas.length === 0);
+    await pegar(ext, vacio);
+    await vacio.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    const areaDe = (pg) => pg.evaluate(() => window.editor.resultado().reduce((t, poli) => t + poli.reduce((u, a, k) => {
+      let d = 0; for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; }
+      return u + (k ? -1 : 1) * Math.abs(d / 2); }, 0), 0));
+    const { p: orig } = await abrirEditor(e.chrome, e.url, 'shou-cruz');
+    const a0 = await areaDe(orig), a1 = await areaDe(vacio);
+    comprobar(Math.abs(a1 / a0 - 1) < 0.002, `pegar el SVG de shou-cruz en un documento vacío da la misma forma (área ${a0.toFixed(5)} → ${a1.toFixed(5)})`);
+    await orig.close(); await vacio.close();
+
+    // ⌥ + arrastrar: exactamente una copia, y ⌘D repite su desplazamiento
+    const n0 = (await capas()).length;
+    await s.keyboard.press('Escape');
+    const base = enSitio[0], pto = await puntoEnCapa(s, base.id);
+    await s.mouse.click(...pto);
+    await s.keyboard.down('Alt'); await s.mouse.move(...pto); await s.mouse.down();
+    await s.mouse.move(pto[0] + 40, pto[1], { steps: 5 }); await s.mouse.up(); await s.keyboard.up('Alt');
+    const trasAlt = await capas();
+    comprobar(trasAlt.length === n0 + 1 && JSON.stringify(trasAlt.find((c) => c.id === base.id).t) === JSON.stringify(base.t),
+      '⌥ + arrastrar crea una sola copia y el original no se mueve');
+    const idC1 = (await sel())[0], c1 = trasAlt.find((c) => c.id === idC1);
+    await s.keyboard.down('Meta'); await s.keyboard.press('d'); await s.keyboard.up('Meta');
+    const idUlt = (await sel())[0], ult = (await capas()).find((c) => c.id === idUlt);
+    comprobar(idUlt !== idC1 && Math.abs((ult.t.x - c1.t.x) - (c1.t.x - base.t.x)) < 1e-12 && Math.abs(c1.t.x - base.t.x) > 0.01,
+      '⌘D tras ⌥ + arrastrar repite el mismo desplazamiento');
+
+    // ⇧H dos veces vuelve a lo mismo; ⇧V refleja en vertical
+    const antesV = JSON.stringify((await capas()).find((c) => c.id === ult.id).t);
+    await s.keyboard.down('Shift'); await s.keyboard.press('h'); await s.keyboard.up('Shift');
+    const volteada = (await capas()).find((c) => c.id === ult.id).t;
+    comprobar(volteada.sx < 0, `⇧H voltea (sx = ${volteada.sx})`);
+    await s.keyboard.down('Shift'); await s.keyboard.press('h'); await s.keyboard.up('Shift');
+    const t2 = (await capas()).find((c) => c.id === ult.id).t, t1 = JSON.parse(antesV);
+    comprobar(Object.keys(t1).every((k) => Math.abs(t2[k] - t1[k]) < 1e-12), '⇧H dos veces deja la capa como estaba');
+
+    // bloquear: ni clic ni recuadro la eligen; Tab recorre las capas
+    await s.keyboard.down('Meta'); await s.keyboard.down('Shift'); await s.keyboard.press('l'); await s.keyboard.up('Shift'); await s.keyboard.up('Meta');
+    comprobar((await capas()).find((c) => c.id === ult.id).bloqueada === true && (await sel()).length === 0, '⇧⌘L bloquea y la suelta');
+    const ptoB = await puntoEnCapa(s, ult.id);
+    await s.mouse.click(...(ptoB ?? [0, 0]));
+    comprobar(!(await sel()).includes(ult.id), 'un clic sobre una capa bloqueada no la elige');
+    await s.keyboard.down('Meta'); await s.keyboard.press('a'); await s.keyboard.up('Meta');
+    comprobar(!(await sel()).includes(ult.id), 'ni ⌘A');
+    await s.keyboard.press('Escape');
+    await s.click(`#capas li[data-id="${originales[0].id}"] .nom`);
+    await s.keyboard.press('Tab');
+    const orden = (await capas()).map((c) => c.id), i0 = orden.indexOf(originales[0].id);
+    comprobar((await sel())[0] === orden[i0 + 1], 'Tab elige la capa de encima');
     await s.close();
   }
 
