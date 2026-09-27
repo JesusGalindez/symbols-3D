@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import shapely
+import shapely.affinity
 import trimesh
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
@@ -474,3 +475,111 @@ def test_generar_rechaza_un_trazo_fino(salida):
     assert r["archivos"] == ["glb/fino.glb"] and not (salida / "glb" / "fino-ligera.glb").exists()
     r = editor.generar("fino", doc, capas[:1])
     assert r["aprobado"] and len(r["archivos"]) == 3 and r["aviso_web"] is None
+
+
+# ---------- F6: importar SVG
+LOGO = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160">
+  <style>.rojo{fill:#e30613} .linea{fill:none;stroke:#000}</style>
+  <defs><path id="oculto" d="M0 0h500v500z"/></defs>
+  <circle class="rojo" cx="60" cy="60" r="40"/>
+  <path class="linea" d="M0 0L240 160"/>
+  <g transform="rotate(30 170 50)"><rect x="130" y="20" width="80" height="60" rx="15" ry="10"/></g>
+  <path d="M20 150C20 110 100 110 100 150ZM130 150q30-40 60 0t40 0z"/>
+  <path d="M140 95a25 25 0 1 1 50 0a25 25 0 1 1-50 0zM152 95a13 13 0 1 0 26 0a13 13 0 1 0-26 0z"/>
+</svg>"""
+
+
+def bezier_densa(P, n=4000):
+    """La cúbica muestreada a mano (sin pasar por curvas.aplanar ni por el importador)."""
+    return [tuple((1 - t) ** 3 * P[0][j] + 3 * (1 - t) ** 2 * t * P[1][j] + 3 * (1 - t) * t * t * P[2][j] + t ** 3 * P[3][j]
+                  for j in (0, 1)) for t in (k / n for k in range(n + 1))]
+
+
+def logo_exacto():
+    """El dibujo de LOGO, en coordenadas del SVG, de las fórmulas de cada figura."""
+    from shapely import affinity
+    circulo = Point(60, 60).buffer(40, quad_segs=1024)
+    esquina = lambda x, y: affinity.scale(Point(x, y).buffer(1, quad_segs=1024), 15, 10, origin=(x, y))  # noqa: E731
+    rect = unary_union([box(145, 20, 195, 80), box(130, 30, 210, 70),
+                        *(esquina(x, y) for x in (145, 195) for y in (30, 70))])
+    rect = affinity.rotate(rect, 30, origin=(170, 50))
+    gota = Polygon(bezier_densa([(20, 150), (20, 110), (100, 110), (100, 150)]))
+    # q30-40 60 0 t40 0: dos lóbulos (cuadráticas; el control de la t, el de la q reflejado)
+    q1 = [(130 + 2 * t * (1 - t) * 30 + t * t * 60, 150 - 2 * t * (1 - t) * 40) for t in (k / 4000 for k in range(4001))]
+    q2 = [(190 + 2 * t * (1 - t) * 30 + t * t * 40, 150 + 2 * t * (1 - t) * 40) for t in (k / 4000 for k in range(4001))]
+    lobulos = shapely.make_valid(Polygon(q1 + q2))
+    anillo = Point(165, 95).buffer(25, quad_segs=1024).difference(Point(165, 95).buffer(13, quad_segs=1024))
+    return unary_union([circulo, rect, gota, lobulos, anillo])
+
+
+def test_importar_svg_iou_con_su_dibujo(salida):
+    """Criterio de F6: un SVG con arcos, cúbicas, cuadráticas, transform y estilos de clase
+    importado → IoU ≥ 0,999 con el dibujo exacto de sus figuras (fórmulas, no el importador)."""
+    from shapely import affinity
+    r = editor.importar("Logo Final.svg", LOGO)
+    assert r["nombre"] == "logo-final"
+    doc, m = r["doc"], r["marco"]
+    assert len(doc["capas"]) == 4 and all(c["op"] == "unir" for c in doc["capas"])  # sin trazos ni defs
+    nodos = [n for c in doc["capas"] for a in c["anillos"] for n in a]
+    assert sum(1 for n in nodos if n["ent"] or n["sal"]) >= 20 and len(nodos) < 60  # curvas, no polígonos
+    hecho = editor.planta(en_mundo(doc))
+    exacto = affinity.scale(affinity.translate(logo_exacto(), -m["cx"], -m["cy"]), m["s"], -m["s"], origin=(0, 0))
+    iou = hecho.intersection(exacto).area / hecho.union(exacto).area
+    assert iou >= 0.999, iou
+    b = hecho.bounds
+    assert abs(max(b[2] - b[0], b[3] - b[1]) - 1) < 1e-3 and abs(b[0] + b[2]) < 1e-3 and abs(b[1] + b[3]) < 1e-3
+    info = editor.generar(r["nombre"], doc, en_mundo(doc))
+    assert info["estanca"] and info["aprobado"]
+
+
+@pytest.mark.parametrize("d, regla, area", [
+    ("M0 0h10v10h-10zM3 3h4v4h-4z", "nonzero", 100),      # mismo sentido: nonzero lo rellena
+    ("M0 0h10v10h-10zM3 3v4h4v-4z", "nonzero", 84),       # sentido contrario: hueco
+    ("M0 0h10v10h-10zM3 3h4v4h-4z", "evenodd", 84),
+    ("M0 0h6v6h-6zM4 4h6v6h-6z", "nonzero", 68),          # dos que se solapan: unión
+    ("M0 0h6v6h-6zM4 4h6v6h-6z", "evenodd", 64),
+])
+def test_importar_respeta_la_regla_de_relleno(d, regla, area):
+    capas, m = editor.leer_svg.leer(f'<svg xmlns="http://www.w3.org/2000/svg"><path fill-rule="{regla}" d="{d}"/></svg>')
+    assert abs(editor.planta([{"op": c["op"], "anillos": c["anillos"]} for c in capas]).area / m["s"] ** 2 - area) < 1e-6
+
+
+def test_importar_trayectos_raros():
+    """Banderas de arco pegadas («a5 5 0 105 0»), dibujar tras Z sin M (otra subruta desde
+    el inicio de la anterior) y números como «1.5.5» (= 1.5 y .5)."""
+    sub = editor.leer_svg.subrutas("M0 0h10v10h-10zl5 0 0 5z")
+    assert [r[0] for r in sub] == [(0, 0), (0, 0)] and sub[1][1][0] == ("recta", (5, 0))
+    arco = editor.leer_svg.subrutas("M0 0a5 5 0 105 0")[0][1]
+    assert len(arco) >= 3 and arco[-1][-1] == (5, 0)  # arco grande: tres cuartos de vuelta
+    assert editor.leer_svg.subrutas("M1.5.5L2 2")[0][0] == (1.5, 0.5)
+    with pytest.raises(ValueError):
+        editor.leer_svg.leer('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0L9 9" fill="none" stroke="red"/></svg>')
+
+
+def iou(a, b):
+    return a.intersection(b).area / a.union(b).area
+
+
+def test_exportar_svg_y_volver_a_importar():
+    """Solo capas que unen: una ruta por capa con los nodos tal cual, y reimportado da la
+    misma forma. Con una resta y simetría: la forma combinada, reajustada a curvas."""
+    r = editor.importar("logo.svg", LOGO)
+    capas = [{**c, "anillos": a} for c, a in zip(r["doc"]["capas"], (x["anillos"] for x in en_mundo(r["doc"])))]
+    texto = editor.exportar_svg(capas, None, [0.6, 0.05, 0.03, 1])
+    assert texto.count("<path") == 4 and 'fill="#cb3f30"' in texto and 'id="Círculo 1"' in texto
+    vuelta = editor.importar("vuelta.svg", texto)["doc"]
+    assert sum(len(a) for c in vuelta["capas"] for a in c["anillos"]) == sum(len(a) for c in capas for a in c["anillos"])
+    assert iou(editor.planta(en_mundo(vuelta)), editor.planta(capas)) > 0.99999
+
+    hueco = {"nombre": "Hueco", "op": "restar", "anillos": [[{"p": [x, y], "ent": None, "sal": None}
+                                                             for x, y in ((-0.45, 0.2), (-0.2, 0.2), (-0.2, 0.3), (-0.45, 0.3))]]}
+    sim = {"lr": True, "x": -1}
+    texto = editor.exportar_svg([*capas, hueco], sim, [0.6, 0.05, 0.03, 1])
+    assert texto.count("<path") == 1 and "C" in texto
+    vuelta = editor.importar("vuelta.svg", texto)
+    esperado = editor.planta([*capas, hueco], sim)
+    # el importador lo escala a diámetro 1: se compara en la escala del diseño
+    hecho = shapely.affinity.scale(editor.planta(en_mundo(vuelta["doc"])), 1 / vuelta["marco"]["s"] / 1000,
+                                   1 / vuelta["marco"]["s"] / 1000, origin=(0, 0))
+    hecho = shapely.affinity.translate(hecho, *(esperado.centroid.coords[0][k] - hecho.centroid.coords[0][k] for k in (0, 1)))
+    assert iou(hecho, esperado) > 0.999

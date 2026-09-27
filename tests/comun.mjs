@@ -18,9 +18,10 @@ export async function arrancar(puerto = 8793) {
     servidor.stdout.on('data', (d) => String(d).includes('Editor en') && ok());
     servidor.on('exit', (c) => mal(new Error(`el servidor salió con código ${c}`)));
   });
-  // SwiftShader: WebGL por software, igual en cualquier Mac y sin ventana
+  // SwiftShader: WebGL por software, igual en cualquier Mac y sin ventana; como root
+  // (contenedores), Chrome solo arranca sin sandbox
   const chrome = await puppeteer.launch({ executablePath: CHROME, headless: 'new',
-    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'], defaultViewport: { width: 1500, height: 850 } });
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])], defaultViewport: { width: 1500, height: 850 } });
   return {
     url: `http://localhost:${puerto}/editor.html`, salida, chrome,
     async parar() { await chrome.close(); servidor.kill(); rmSync(salida, { recursive: true, force: true }); },

@@ -490,6 +490,68 @@ try {
     await f.close();
   }
 
+  // F6: importar un SVG (Abrir → Importar SVG…), exportarlo, reordenar capas arrastrando,
+  // deshacer con la selección, ⇧1 / ⇧0 y el panel de atajos (?)
+  {
+    const logo = join(e.salida, 'Logo Prueba.svg');
+    writeFileSync(logo, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
+      <style>.a{fill:#e30613}</style><circle class="a" cx="50" cy="60" r="40"/>
+      <rect x="110" y="20" width="80" height="80" rx="12"/><path d="M0 0L200 120" fill="none" stroke="#000"/>
+      <path d="M100 110q20-30 40 0z"/></svg>`);
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'xi-doble');
+    const [elegir] = await Promise.all([s.waitForFileChooser(), s.select('#abrir', '+importar')]);
+    await elegir.accept([logo]);
+    await s.waitForFunction(() => /Importado/.test(document.querySelector('#estado').textContent), { timeout: 10000 });
+    const doc = await s.evaluate(() => window.editor.doc());
+    comprobar(doc.capas.length === 3 && await s.$eval('#nombre', (x) => x.value) === 'logo-prueba',
+      `importar un SVG: una capa por figura rellena, sin el trazo (${doc.capas.map((c) => c.nombre).join(', ')}) y nombre logo-prueba`);
+    comprobar(doc.capas[0].anillos[0].length === 4 && doc.capas[0].anillos[0].every((n) => n.ent && n.sal), 'el círculo llega como 4 nodos con curvas');
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    comprobar(/exacta/.test(await s.$eval('#etiqueta2d', (x) => x.textContent)), 'y el servidor da su geometría exacta');
+    const svg = await s.evaluate(() => window.editor.svgDiseno());
+    comprobar(!svg.error && (svg.svg.match(/<path/g) ?? []).length === 3 && /C/.test(svg.svg), 'exportar SVG: una ruta con curvas por capa');
+
+    const orden = () => s.$$eval('#capas li .nom', (l) => l.map((x) => x.textContent));
+    const o0 = await orden();  // de arriba abajo
+    const li = async (i) => s.$eval(`#capas li:nth-child(${i})`, (x) => { const r = x.getBoundingClientRect(); return [r.x + r.width / 2, r.y, r.height]; });
+    const [ax, ay, ah] = await li(1), [, by, bh] = await li(3);
+    await s.mouse.move(ax, ay + ah / 2); await s.mouse.down();
+    await s.mouse.move(ax, by + bh * 0.8, { steps: 6 }); await s.mouse.up();
+    const o1 = await orden();
+    comprobar(o1.join() === [o0[1], o0[2], o0[0]].join(), `arrastrar la de arriba bajo la última la manda al fondo (${o0} → ${o1})`);
+    comprobar((await s.evaluate(() => window.editor.seleccion().length)) === 0, 'soltar tras arrastrar no cambia la selección');
+
+    // deshacer devuelve también la selección: se elige una, se mueve, se deselecciona y ⌘Z
+    await s.click('#capas li:nth-child(2)');
+    const id = await s.evaluate(() => window.editor.seleccion()[0]);
+    await s.keyboard.press('ArrowRight');
+    await s.keyboard.press('Escape');
+    comprobar((await s.evaluate(() => window.editor.seleccion().length)) === 0, 'Esc suelta la selección');
+    await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.up('Meta');
+    const tras = await s.evaluate(() => window.editor.seleccion());
+    comprobar(tras.length === 1 && tras[0] === id, 'deshacer vuelve a seleccionar la capa que se había movido');
+    await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.up('Meta');
+    comprobar((await s.$$eval('#capas li .nom', (l) => l.map((x) => x.textContent))).join() === o0.join(), 'y otro ⌘Z deshace el reordenado');
+
+    // ⇧1 ajusta lo visible al lienzo; ⇧0 vuelve al 100 %
+    const escala = () => s.evaluate(() => { const [a] = window.editor.aCliente(0, 0), [b] = window.editor.aCliente(1, 0); return b - a; });
+    await s.keyboard.press('Escape');
+    const z0 = await escala();
+    await s.click('#capas li:nth-child(3)');  // la más pequeña: el lóbulo
+    await s.keyboard.down('Shift'); await s.keyboard.press('Digit1'); await s.keyboard.up('Shift');
+    const z1 = await escala();
+    comprobar(z1 > z0 * 2, `⇧1 con una capa elegida la ajusta al lienzo (zoom ×${(z1 / z0).toFixed(2)})`);
+    await s.keyboard.down('Shift'); await s.keyboard.press('Digit0'); await s.keyboard.up('Shift');
+    comprobar(Math.abs(await escala() - z0) < 1e-6, '⇧0 vuelve al 100 %');
+
+    await s.keyboard.press('?');
+    comprobar(!(await s.$eval('#ayuda', (x) => x.hidden)), '? abre el panel de atajos');
+    await s.keyboard.press('Escape');
+    comprobar(await s.$eval('#ayuda', (x) => x.hidden) && (await s.evaluate(() => window.editor.seleccion().length)) === 1,
+      'Esc lo cierra sin soltar la selección');
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {

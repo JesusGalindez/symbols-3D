@@ -1,4 +1,5 @@
-"""Servidor del editor de símbolos (editor.html): abre, guarda, combina y genera.
+"""Servidor del editor de símbolos (editor.html): abre, guarda, combina, corta, importa y
+exporta SVG, y genera.
 
 Uso:  .venv/bin/python tools/editor.py                 -> http://localhost:8792/editor.html
       .venv/bin/python tools/editor.py --puerto 8793 --salida /tmp/x   (pruebas: nada cae en glb/)
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +33,7 @@ from shapely.ops import polygonize, unary_union
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import curvas  # noqa: E402
+import leer_svg  # noqa: E402
 import simbolo as s  # noqa: E402
 
 NOMBRE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -100,6 +103,80 @@ def piezas_curvas(nombre):
         doc["version"] = 2
         _curvas[nombre] = (fecha, doc)
     return json.loads(json.dumps(_curvas[nombre][1]))  # copia: quien la recibe puede cambiarla
+
+
+def importar(nombre, texto):
+    """Un SVG externo -> documento nuevo (versión 2): una capa por elemento relleno, con sus
+    curvas (tools/leer_svg.py), escalado a diámetro 1. El nombre sale del del archivo, sin
+    pisar un documento ni un símbolo."""
+    capas, marco = leer_svg.leer(texto)
+    doc = {"version": 2, "origen": None, "capas": [], "ajustes": dict(AJUSTES)}
+    r = lambda v: None if v is None else [round(v[0], 9), round(v[1], 9)]  # noqa: E731
+    for c in capas:
+        pts = [q for a in c["anillos"] for q in curvas.aplanar(a)]
+        cx = (min(q[0] for q in pts) + max(q[0] for q in pts)) / 2
+        cy = (min(q[1] for q in pts) + max(q[1] for q in pts)) / 2
+        anillos = [[{"p": r([n["p"][0] - cx, n["p"][1] - cy]), "ent": r(n["ent"]), "sal": r(n["sal"])} for n in a]
+                   for a in c["anillos"]]
+        for a in anillos:
+            for n in a:
+                n["tipo"] = tipo_nodo(n)
+        doc["capas"].append({"id": len(doc["capas"]) + 1, "nombre": c["nombre"], "op": c["op"], "visible": True,
+                             "anillos": anillos, "t": {"x": round(cx, 9), "y": round(cy, 9), "r": 0, "sx": 1, "sy": 1}})
+    base = re.sub(r"-+", "-", re.sub(r"[^a-z0-9-]", "-", Path(nombre).stem.lower())).strip("-") or "importado"
+    libre, k = base, 2
+    while (docs() / f"{libre}.json").exists() or protegido(libre) or (s.RAIZ / "svg" / f"{libre}.svg").exists():
+        libre, k = f"{base}-{k}", k + 1
+    return {"nombre": libre, "doc": doc, "marco": marco}
+
+
+def trazo_svg(anillos, K=1000):
+    """Anillos de nodos en el mundo -> d="…" de SVG, en milésimas y con y hacia abajo."""
+    f = lambda x, y: f"{round(x * K, 3):g} {round(-y * K, 3):g}"  # noqa: E731
+    d = []
+    for a in anillos:
+        d.append("M" + f(*a[0]["p"]))
+        for i, n in enumerate(a):
+            m = a[(i + 1) % len(a)]
+            if n["sal"] is None and m["ent"] is None:
+                d.append("L" + f(*m["p"]))
+                continue
+            c1 = [n["p"][0] + n["sal"][0], n["p"][1] + n["sal"][1]] if n["sal"] is not None else n["p"]
+            c2 = [m["p"][0] + m["ent"][0], m["p"][1] + m["ent"][1]] if m["ent"] is not None else m["p"]
+            d.append(f"C{f(*c1)} {f(*c2)} {f(*m['p'])}")
+        d.append("Z")
+    return "".join(d)
+
+
+def exportar_svg(capas, simetria, color):
+    """El diseño como SVG con curvas, sin el redondeo del acabado (ese es del GLB). Solo
+    capas que unen y sin simetría: una ruta por capa con sus nodos tal cual (limpio para
+    Figma o Illustrator, con el nombre de cada capa). Con restas o simetría, la forma
+    combinada (planta) reajustada a rectas, arcos y cúbicas como al abrir un símbolo: una
+    sola ruta evenodd que cualquier programa (y el importador) lee igual."""
+    rgb = "#" + "".join(f"{round(255 * (12.92 * v if v <= 0.0031308 else 1.055 * v ** (1 / 2.4) - 0.055)):02x}"
+                        for v in (min(max(float(c), 0), 1) for c in color[:3]))  # lineal (glTF) -> sRGB
+    visibles = [c for c in capas if c.get("visible", True)]
+    if not visibles:
+        raise ValueError("no hay ninguna capa visible que exportar")
+    if simetria is None and all(c["op"] == "unir" for c in visibles):
+        rutas = [(c.get("nombre", f"Capa {i + 1}"), [a for a in c["anillos"] if a and isinstance(a[0], dict)]) for i, c in enumerate(visibles)]
+        pts = [q for _, anillos in rutas for a in anillos for q in curvas.aplanar(a)]
+    else:
+        geo = planta(visibles, simetria)
+        if geo.is_empty:
+            raise ValueError("no queda ninguna forma que exportar")
+        anillos = [curvas.ajustar_anillo(list(a.coords)[:-1], TOL_CURVAS)[0]
+                   for p in s.lista(geo) for a in [p.exterior, *p.interiors]]
+        rutas, pts = [("Diseño", anillos)], [q for p in s.lista(geo) for q in p.exterior.coords]
+    x0, x1 = min(q[0] for q in pts) * 1000 - 20, max(q[0] for q in pts) * 1000 + 20
+    y0, y1 = -max(q[1] for q in pts) * 1000 - 20, -min(q[1] for q in pts) * 1000 + 20
+    marco = " ".join(f"{round(v, 3):g}" for v in (x0, y0, x1 - x0, y1 - y0))
+    esc = lambda t: str(t).replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")  # noqa: E731
+    cuerpo = "\n".join(f'<path id="{esc(nombre)}" fill="{rgb}" fill-rule="evenodd" d="{trazo_svg(anillos)}"/>'
+                       for nombre, anillos in rutas if anillos)
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{marco}" width="{round(x1 - x0, 3):g}" '
+            f'height="{round(y1 - y0, 3):g}">\n{cuerpo}\n</svg>\n')
 
 
 def anillo_valido(a):
@@ -533,6 +610,17 @@ class Manejador(SimpleHTTPRequestHandler):
                 return self.responder(cortar(datos["capas"], datos["linea"]))
             except Exception as e:
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
+        if self.path == "/api/svg":
+            try:
+                texto = exportar_svg(datos["capas"], datos.get("simetria"), datos["color"])
+            except Exception as e:
+                return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
+            return self.responder({"svg": texto})
+        if self.path == "/api/importar":  # el nombre es el del archivo: importar() lo limpia
+            try:
+                return self.responder(importar(str(datos.get("nombre", "")), datos["svg"]))
+            except (ValueError, ET.ParseError) as e:
+                return self.responder({"error": f"no se pudo importar el SVG: {e}"}, 422)
         nombre = datos.get("nombre", "")
         if not NOMBRE.match(nombre):
             return self.responder({"error": "nombre: minúsculas, números y guiones"}, 400)

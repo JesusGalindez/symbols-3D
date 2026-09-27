@@ -501,6 +501,33 @@ renderizado; todas las pruebas en verde.
 
 **Tarea de usuario (5 min):** importar un logotipo exportado de Figma y generarlo.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). Sobre lo previsto:
+- **Importar** (`tools/leer_svg.py`, «Abrir → Importar SVG…»): path, rect (redondeado),
+  circle, ellipse, polygon y polyline, con transform, estilos de atributo, de `style` y de
+  clase (`<style>` de Illustrator). Cuadráticas a cúbicas exactas; arcos a cúbicas de
+  ≤ 90°. Una capa por figura rellena; lo que no rellena (trazos, `defs`, máscaras) no
+  entra. **fill-rule nonzero:** si evenodd da lo mismo, una capa; si no, se quitan los
+  anillos que no cambian el relleno al cruzarlos; si ni así (subrutas que se cruzan),
+  un anillo por capa, «unir» o «restar». Criterio medido: IoU 0,99973 contra las fórmulas
+  de sus figuras (no un renderizado: aquí no hay con qué rasterizar un SVG sin añadir
+  dependencias), y el importado se genera APROBADO.
+- **Exportar lo hace el servidor** (`exportar_svg`), no el navegador: con solo capas que
+  unen, una ruta por capa con sus nodos tal cual; **con restas o simetría, la forma
+  combinada reajustada a curvas** (`curvas.ajustar_anillo`), una sola ruta. La primera
+  idea, una máscara SVG, no se podía reimportar y no todos los programas la leen.
+  Ida y vuelta: IoU > 0,99999 sin restas y > 0,999 con ellas.
+- **Deshacer con la selección:** cada paso guarda la selección de después; al deshacer
+  vuelve la del paso deshecho (si era vacía, como tras borrar, la de antes).
+- **Reordenar arrastrando** lleva la capa o, si está elegida, toda la selección.
+- ⇧1 ajusta lo visible **o la selección**; «?» abre los atajos (Esc los cierra).
+- La skill `simbolos-3d` vive fuera del repositorio: su fila queda pendiente.
+- `tests/comun.mjs` añade `--no-sandbox` si corre como root (contenedores). Allí el visor
+  no carga three.js del CDN, así que esa comprobación de `test:ui` solo pasa con internet.
+
+Medido: pytest 45 en verde (+ `test_simetria_no_degrada…`, que necesita
+`fuentes/xi-doble.png`, no publicada); `test:ui` 97 en verde sin el visor; arrastre de
+shou-circular 0,2 ms de mediana.
+
 ---
 
 ## Decisiones que son tuyas (con mi recomendación)

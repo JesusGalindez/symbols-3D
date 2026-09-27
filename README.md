@@ -77,6 +77,28 @@ Works best with images of **500 px or more**, as PNG, on a flat background and w
 
 The text is centered on the origin. `--separadas` also writes one model per letter, and `--ligera` writes the gallery version. It writes `fuentes/<name>.png` with the font's exact silhouette, so text is verified just like a symbol. Use heavy weights (Bold, Demi, Heavy): with thin ones the rounding eats the stroke.
 
+### Editor
+
+A layer editor in the browser, Figma-style, with a live 3D preview. It opens any symbol in the gallery as editable Bézier curves, and "Generate GLB" writes the same three versions with the same finish as the command-line tools.
+
+```bash
+.venv/bin/python tools/editor.py
+# open http://localhost:8792/editor.html   (?s=<name> opens that symbol or document)
+```
+
+On macOS, double-clicking `editor.command` does the same.
+
+- **Layers.** Each layer is a closed shape with its own position, rotation and scale. Layers combine bottom to top: *unir* (add) or *restar* (subtract whatever is below). Drag them in the list to reorder.
+- **Tools.** Move (V), rectangle (R), ellipse (O), pen (P) for curves, and knife (K), which cuts a symbol into separate strokes: the blue lines are suggested cuts at the stroke joints. Enter or a double click edits the nodes and handles of a layer.
+- **Precision.** Smart guides snap moving layers, nodes and knife lines to edges, corners, centers and the axes; live left-right or top-bottom symmetry mirrors one half; several layers can be selected, aligned and distributed.
+- **SVG in and out.** *Open → Import SVG…* brings in an outside logo (from Figma, Illustrator, Inkscape…) with its curves: paths, rectangles, circles, ellipses and polygons, with transforms, class styles and both fill rules; each filled shape becomes a layer, scaled to diameter 1. Strokes are ignored, so convert them to outlines first. *SVG* exports the design with its curves, without the rounded finish (that one belongs to the GLB).
+- **Exact geometry.** The browser only draws a preview, labeled as such. The shape that counts is combined by the server with shapely, and "Generate GLB" checks it before shipping: watertight mesh, exact normals, and no stroke so thin that the rounding eats it. If a check fails, only the detailed model is written, so you can inspect it.
+- **Safe by default.** Documents are saved automatically to `editor/<name>.json`, with the last 20 copies in `editor/.historial/`. Undo and redo (⌘Z, ⇧⌘Z) also bring back the selection. A GLB that did not come from the editor is never overwritten.
+
+Press **?** in the editor for every shortcut. ⇧1 fits the visible shapes (or the selection) to the canvas; ⇧0 goes back to 100 %. The design notes, phase by phase, are in [docs/PLAN-EDITOR.md](docs/PLAN-EDITOR.md).
+
+Tests: `.venv/bin/pytest tests/` (server) and `npm run test:ui` (full walk-through in Chrome; set `CHROME` to the browser binary outside macOS).
+
 ### Viewer
 
 ```bash
@@ -121,12 +143,18 @@ tools/
   letras.py      text + .ttf/.otf/.ttc font → .glb
   verificar.py   judge: .glb vs. image, PASS/FAIL per criterion
   simbolo.py     shared: mask, rounded bevel, normals, export
+  editor.py      editor server: open, save, combine, cut, import/export SVG, generate
+  curvas.py      dense outlines ↔ Bézier nodes (lines, arcs, cubics)
+  leer_svg.py    outside SVG → editor layers with their curves
+editor.html      layer editor with live 3D preview
+editor/          editor documents and their history (not published)
+tests/           server tests (pytest) and browser tests (Chrome)
 glb/             detailed and light models · glb/web/ meshopt versions
 svg/             2D outline of each model and its check mask
 fuentes/         source images
 video/           scene, exporter, music and sample video
 visor.html       three.js viewer
-docs/            README images
+docs/            README images and the editor plan
 ```
 
 File, folder and flag names are in Spanish (`fuentes` = sources, `ligera` = light, `simetria` = symmetry).
