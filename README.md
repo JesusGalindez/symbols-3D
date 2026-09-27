@@ -98,7 +98,7 @@ On macOS, double-clicking `editor.command` does the same.
 - **Exact geometry.** The browser only draws a preview, labeled as such. The shape that counts is combined by the server with shapely, and "Generate GLB" checks it before shipping: watertight mesh, exact normals, and no stroke so thin that the rounding eats it. If a check fails, only the detailed model is written, so you can inspect it.
 - **Safe by default.** Documents are saved automatically to `editor/<name>.json`, with the last 20 copies in `editor/.historial/`. Undo and redo (⌘Z, ⇧⌘Z) also bring back the selection. A GLB that did not come from the editor is never overwritten.
 
-Press **?** in the editor for every shortcut. ⇧1 fits the visible shapes (or the selection) to the canvas; ⇧0 goes back to 100 %. The design notes, phase by phase, are in [docs/PLAN-EDITOR.md](docs/PLAN-EDITOR.md) and [docs/PLAN-FIGMA.md](docs/PLAN-FIGMA.md).
+Press **?** in the editor for every shortcut. ⇧1 fits everything visible to the canvas, ⇧2 the selection, and ⇧0 goes back to 100 %. The design notes, phase by phase, are in [docs/PLAN-EDITOR.md](docs/PLAN-EDITOR.md) and [docs/PLAN-FIGMA.md](docs/PLAN-FIGMA.md).
 
 Tests: `.venv/bin/pytest tests/` (server), `npm run test:ui` (full walk-through in Chrome; set `CHROME` to the browser binary outside macOS) and `npm run test:rendimiento` (frame budget). GitHub Actions runs the first two on every push.
 
