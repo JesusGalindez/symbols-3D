@@ -13,6 +13,7 @@ Formato de nodo (el de 4.1): {"p": [x, y], "ent": [dx, dy] | None, "sal": [dx, d
 con tiradores relativos a p; sin tirador, ese lado es recto.
 """
 import argparse
+import bisect
 import math
 import sys
 import time
@@ -223,25 +224,26 @@ def ajustar_anillo(anillo, tol=0.0005):
     return fundidos, [t[2] for t in tramos]
 
 
-def aplanar(nodos, tol=0.0001):
-    """Nodos -> polilínea cerrada (sin repetir el primero). Cada cúbica se parte por la
-    mitad (De Casteljau) hasta que sus tiradores quedan a menos de tol de la cuerda.
-    En floats de Python y no numpy: aplanar() de editor.html es esta misma, operación por
-    operación, y las dos dan los mismos puntos (lo comprueba tests/test_editor.py)."""
+def aplanar_t(nodos, tol=0.0001):
+    """Nodos -> polilínea cerrada (sin repetir el primero), con cada punto como
+    (x, y, k, t): sale del tramo k (del nodo k al siguiente) en el parámetro t. Cada
+    cúbica se parte por la mitad (De Casteljau) hasta que sus tiradores quedan a menos de
+    tol de la cuerda. En floats de Python y no numpy: aplanar() de editor.html es esta
+    misma, operación por operación, y las dos dan los mismos puntos (lo comprueba
+    tests/test_editor.py)."""
     out = []
     n = len(nodos)
     for k in range(n):
         a, b = nodos[k], nodos[(k + 1) % n]
         (x0, y0), (x3, y3) = a["p"], b["p"]
-        out.append([x0, y0])
+        out.append((x0, y0, k, 0.0))
         if a["sal"] is None and b["ent"] is None:
             continue
         x1, y1 = (x0 + a["sal"][0], y0 + a["sal"][1]) if a["sal"] is not None else (x0, y0)
         x2, y2 = (x3 + b["ent"][0], y3 + b["ent"][1]) if b["ent"] is not None else (x3, y3)
-        pila = [(x0, y0, x1, y1, x2, y2, x3, y3)]
+        pila = [(x0, y0, x1, y1, x2, y2, x3, y3, 0.0, 1.0)]
         while pila:
-            q = pila.pop()
-            ax, ay, bx, by, cx, cy, dx, dy = q
+            ax, ay, bx, by, cx, cy, dx, dy, t0, t1 = pila.pop()
             vx, vy = dx - ax, dy - ay
             L = math.hypot(vx, vy)
             if L > 1e-15:
@@ -249,15 +251,138 @@ def aplanar(nodos, tol=0.0001):
             else:
                 plano = max(math.hypot(bx - ax, by - ay), math.hypot(cx - ax, cy - ay))
             if plano <= tol:
-                out.append([dx, dy])
+                out.append((dx, dy, k, t1))
                 continue
             abx, aby, bcx, bcy, cdx, cdy = (ax + bx) / 2, (ay + by) / 2, (bx + cx) / 2, (by + cy) / 2, (cx + dx) / 2, (cy + dy) / 2
             ex, ey, fx, fy = (abx + bcx) / 2, (aby + bcy) / 2, (bcx + cdx) / 2, (bcy + cdy) / 2
-            mx, my = (ex + fx) / 2, (ey + fy) / 2
-            pila.append((mx, my, fx, fy, cdx, cdy, dx, dy))
-            pila.append((ax, ay, abx, aby, ex, ey, mx, my))
+            mx, my, tm = (ex + fx) / 2, (ey + fy) / 2, (t0 + t1) / 2
+            pila.append((mx, my, fx, fy, cdx, cdy, dx, dy, tm, t1))
+            pila.append((ax, ay, abx, aby, ex, ey, mx, my, t0, tm))
         out.pop()  # el último trozo acaba en el nodo siguiente, que pone él mismo
     return out
+
+
+def aplanar(nodos, tol=0.0001):
+    """Nodos -> polilínea cerrada [[x, y], ...] (ver aplanar_t)."""
+    return [[x, y] for x, y, _, _ in aplanar_t(nodos, tol)]
+
+
+def controles(nodos, k):
+    """Los cuatro puntos de control del tramo k, o None si es recto."""
+    a, b = nodos[k], nodos[(k + 1) % len(nodos)]
+    if a["sal"] is None and b["ent"] is None:
+        return None
+    p0, p3 = a["p"], b["p"]
+    p1 = [p0[0] + a["sal"][0], p0[1] + a["sal"][1]] if a["sal"] is not None else p0
+    p2 = [p3[0] + b["ent"][0], p3[1] + b["ent"][1]] if b["ent"] is not None else p3
+    return [p0, p1, p2, p3]
+
+
+def en_bezier(P, t):
+    u = 1 - t
+    return [u * u * u * P[0][j] + 3 * u * u * t * P[1][j] + 3 * u * t * t * P[2][j] + t * t * t * P[3][j] for j in (0, 1)]
+
+
+def sub_bezier(P, t0, t1):
+    """El trozo [t0, t1] de la cúbica P, en el sentido de t0 a t1 (De Casteljau)."""
+    if t0 > t1:
+        return sub_bezier(P, t1, t0)[::-1]
+    lerp = lambda u, v, t: [u[0] + t * (v[0] - u[0]), u[1] + t * (v[1] - u[1])]  # noqa: E731
+
+    def partir(Q, t):  # -> (izquierda, derecha)
+        a, b, c = lerp(Q[0], Q[1], t), lerp(Q[1], Q[2], t), lerp(Q[2], Q[3], t)
+        d, e = lerp(a, b, t), lerp(b, c, t)
+        f = lerp(d, e, t)
+        return [Q[0], a, d, f], [f, e, c, Q[3]]
+    izq = partir(P, t1)[0] if t1 < 1 else P
+    return partir(izq, t0 / t1)[1] if t0 > 0 else izq
+
+
+def indice(anillos):
+    """De los anillos de nodos de una capa (en el mundo): cada punto aplanado -> (anillo,
+    tramo, t), y las cuerdas de los tramos curvos, para situar los puntos nuevos de un corte."""
+    puntos, cuerdas, ts = {}, [], {}
+    for r, nodos in enumerate(anillos):
+        pts = aplanar_t(nodos)
+        for i, (x, y, k, t) in enumerate(pts):
+            puntos.setdefault((x, y), (r, k, t))
+            ts.setdefault((r, k), []).append(t)
+            x2, y2, k2, t2 = pts[(i + 1) % len(pts)]
+            if controles(nodos, k) is not None:
+                cuerdas.append((x, y, x2, y2, r, k, t, t2 if k2 == k else 1.0))
+    return {"anillos": anillos, "puntos": puntos, "cuerdas": cuerdas, "ts": {rk: sorted(v) for rk, v in ts.items()}}
+
+
+def recurvar(anillo, ind):
+    """Un anillo de una pieza cortada (polígono cerrado sobre la forma aplanada) -> nodos
+    con las curvas de la capa original. Cada vértice que sale del aplanado sabe su tramo
+    y su t; uno nuevo (donde la cuchilla cruza una cuerda) se lleva a la curva, al mismo
+    sitio en las dos piezas que lo comparten. Los trozos seguidos de un mismo tramo se
+    rehacen con De Casteljau; lo demás, rectas. Sin tramos curvos da nodos vivos."""
+    pts = [list(q) for q in anillo[:-1]]
+    info = []
+    for q in pts:
+        i = ind["puntos"].get((q[0], q[1]))
+        if i is None:
+            for x, y, x2, y2, r, k, ta, tb in ind["cuerdas"]:
+                vx, vy = x2 - x, y2 - y
+                L2 = vx * vx + vy * vy
+                if L2 == 0:
+                    continue
+                lam = ((q[0] - x) * vx + (q[1] - y) * vy) / L2
+                if -1e-9 <= lam <= 1 + 1e-9 and abs((q[0] - x) * vy - (q[1] - y) * vx) / math.sqrt(L2) < 1e-10:
+                    i = (r, k, ta + lam * (tb - ta))
+                    q[:] = en_bezier(controles(ind["anillos"][r], k), i[2])
+                    break
+        info.append(i)
+    n = len(pts)
+
+    def en_tramos(i):  # un nodo de la capa es el final (t = 1) del tramo anterior
+        if i is None:
+            return {}
+        r, k, t = i
+        m = {(r, k): t}
+        if t == 0:
+            m[(r, (k - 1) % len(ind["anillos"][r]))] = 1.0
+        return m
+
+    def entre(lista, t0, t1):  # ¿algún t del aplanado estrictamente entre t0 y t1?
+        lo, hi = min(t0, t1), max(t0, t1)
+        return bisect.bisect_right(lista, lo) < bisect.bisect_left(lista, hi)
+
+    lados = []  # por arista i -> i+1: None (recta) o (r, k, ti, tj)
+    for i in range(n):
+        a, b = en_tramos(info[i]), en_tramos(info[(i + 1) % n])
+        # sobre la curva solo si son vecinos en el aplanado: si la cuchilla cruza dos veces
+        # un mismo tramo, la arista entre los dos cruces es el corte, no la curva
+        comun = next(((rk, a[rk], b[rk]) for rk in a if rk in b and a[rk] != b[rk]
+                      and controles(ind["anillos"][rk[0]], rk[1]) is not None
+                      and not entre(ind["ts"][rk], a[rk], b[rk])), None)
+        lados.append(None if comun is None else (comun[0], comun[1], comun[2]))
+
+    def sigue(e, f):  # dos aristas seguidas del mismo tramo, en el mismo sentido
+        return (e is not None and f is not None and e[0] == f[0] and e[2] == f[1]
+                and (e[2] - e[1]) * (f[2] - f[1]) > 0)
+    inicio = next((i for i in range(n) if not sigue(lados[i - 1], lados[i])), 0)
+    nodos, pendiente, i = [], None, 0  # pendiente: el tirador de entrada del nodo siguiente
+    while i < n:
+        a = (inicio + i) % n
+        j = i + 1
+        while j < n and sigue(lados[(inicio + j - 1) % n], lados[(inicio + j) % n]):
+            j += 1
+        b = (inicio + j) % n
+        nodo = {"p": pts[a], "ent": pendiente, "sal": None}
+        pendiente = None
+        if lados[a] is not None:
+            (r, k), t0, t1 = lados[a][0], lados[a][1], lados[(inicio + j - 1) % n][2]
+            P = sub_bezier(controles(ind["anillos"][r], k), t0, t1)
+            nodo["sal"] = [P[1][0] - pts[a][0], P[1][1] - pts[a][1]]
+            pendiente = [P[2][0] - pts[b][0], P[2][1] - pts[b][1]]
+        nodos.append(nodo)
+        i = j
+    if pendiente is not None:  # la última arista acaba en el primero
+        nodos[0]["ent"] = pendiente
+    return nodos
 
 
 def error_max(original, aplanado):

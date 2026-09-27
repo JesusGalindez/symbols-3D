@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import shapely
 import trimesh
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -411,4 +411,49 @@ def test_simetria_no_degrada_un_simbolo_simetrico(salida):
     doc["simetria"] = {"lr": True, "x": -1}
     editor.generar("xi-mitad", doc, capas)
     codigo, v = verificar(salida / "glb" / "xi-mitad.glb", RAIZ / "fuentes" / "xi-doble.png")
+    assert codigo == 0 and v["aprobado"], v
+
+
+def circulo_bezier(r=0.3):
+    k = r * 0.5522847498
+    return [{"p": [x, y], "ent": [y / r * k, -x / r * k], "sal": [-y / r * k, x / r * k], "tipo": "espejo"}
+            for x, y in [(r, 0), (0, r), (-r, 0), (0, -r)]]
+
+
+def test_la_cuchilla_parte_curvas_sin_aplanarlas():
+    """4.3: un círculo de 4 cúbicas cortado por y = 0,1 da dos piezas con curvas (no cientos
+    de puntos): la de arriba, 2 cruces + el nodo de arriba; la de abajo, 2 cruces + 3
+    nodos. Sobre el mismo círculo (< 1e-4) y con la costura en los mismos dos puntos (los
+    cruces se llevan a la curva: se mueven de y = 0,1 lo que la cuerda del aplanado)."""
+    import curvas
+    capa = {"id": 1, "op": "unir", "anillos": [circulo_bezier()]}
+    r = editor.cortar([capa], [[-0.5, 0.1], [0.5, 0.1]])
+    piezas = r["cortes"][0]["piezas"]
+    assert sorted(len(p[0]) for p in piezas) == [3, 5]
+    circulo = editor.forma_capa(capa["anillos"])
+    cruces = []
+    for p in piezas:
+        plano = Polygon(curvas.aplanar(p[0]))
+        mitad = circulo.intersection(box(-1, 0.1, 1, 1) if plano.centroid.y > 0.1 else box(-1, -1, 1, 0.1))
+        assert shapely.hausdorff_distance(plano.boundary, mitad.boundary, densify=0.05) < 1e-4
+        assert all(n["ent"] or n["sal"] for n in p[0])  # cada nodo toca una curva
+        cruces.append(sorted(tuple(n["p"]) for n in p[0] if abs(n["p"][1] - 0.1) < 1e-4))
+    assert cruces[0] == cruces[1] and len(cruces[0]) == 2  # la costura, en los mismos dos puntos
+
+
+def test_cortar_shou_cruz_en_curvas_sigue_aprobado(salida):
+    """Criterio de F1 con curvas: las 40 sugerencias sobre shou-cruz ya en curvas dan piezas
+    válidas con sus curvas (no polígonos densos), y generado sin mover nada, APROBADO."""
+    import itertools
+    doc = editor.piezas_curvas("shou-cruz")
+    capas = [{**c, "id": i + 1} for i, c in enumerate(en_mundo(doc))]
+    sig = itertools.count(100)
+    for linea in editor.sugerencias(capas):
+        aplicar(capas, linea, sig)
+    assert len(capas) >= 20
+    assert all(editor.forma_capa(c["anillos"]).is_valid for c in capas)
+    nodos = [n for c in capas for a in c["anillos"] for n in a]
+    assert len(nodos) < 400 and sum(1 for n in nodos if n["ent"] or n["sal"]) > 150
+    editor.generar("sugerida-curvas", doc, capas)
+    codigo, v = verificar(salida / "glb" / "sugerida-curvas.glb", RAIZ / "fuentes" / "shou-cruz.png")
     assert codigo == 0 and v["aprobado"], v

@@ -10,13 +10,14 @@ html,body{margin:0;height:100%;background:var(--fondo);color:var(--texto);font:1
 #app{display:grid;grid-template-columns:250px 1fr 1fr;grid-template-rows:44px 1fr;height:100%}
 header{grid-column:1/-1;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--panel);border-bottom:1px solid var(--borde)}
 header .sep{width:1px;height:22px;background:var(--borde);margin:0 4px}
+header>button,header>select,header>input{flex-shrink:0;white-space:nowrap}  /* el texto de estado es el que cede */
 button,select,input{font:inherit;color:var(--texto);background:#383838;border:1px solid var(--borde);border-radius:5px;padding:4px 8px}
 button{cursor:pointer}
 button:hover{background:#444}
 button.activo{background:var(--acento);border-color:var(--acento);color:#fff}
 button.primario{background:var(--laca);border-color:var(--laca);color:#fff}
 input[type=number]{width:100%}
-#estado{margin-left:auto;color:var(--tenue);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:45vw}
+#estado{margin-left:auto;color:var(--tenue);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:45vw;min-width:0}
 #estado.error{color:#ff7b6b}
 #estado a{color:var(--acento)}
 aside{background:var(--panel);border-right:1px solid var(--borde);display:flex;flex-direction:column;min-height:0}
@@ -60,6 +61,10 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #sobre .asa.rot{cursor:grab}
 #sobre .nodo{fill:#fff;stroke:var(--acento);stroke-width:1;cursor:pointer;pointer-events:all}
 #sobre .nodo.sel{fill:var(--acento)}
+#sobre .brazo{stroke:var(--acento);stroke-width:1;pointer-events:none}
+#sobre .tirador{fill:#fff;stroke:var(--acento);stroke-width:1.2;cursor:pointer;pointer-events:all}
+#sobre .pluma{fill:rgba(200,50,30,.25);stroke:var(--acento);stroke-width:1.5;pointer-events:none}
+#sobre .pluma-nodo{fill:#fff;stroke:var(--acento);stroke-width:1;pointer-events:none}
 #lienzo .guia{fill:none;stroke:rgba(255,255,255,.08);stroke-dasharray:3 4;pointer-events:none}
 #sobre .dibujo{fill:rgba(13,153,255,.12);stroke:var(--acento);pointer-events:none}
 #sobre .corte{fill:none;stroke:#ff5a5a;stroke-width:1.5;stroke-dasharray:6 4;pointer-events:none}
@@ -78,8 +83,8 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 .flotante-espejo .capa.unir{fill:var(--laca)}
 .flotante-espejo .capa.restar{fill:var(--fondo)}
 #lienzo .costura,#flotante .costura{fill:none;stroke:#ff5a5a;stroke-width:1.5;stroke-dasharray:5 4;pointer-events:none}
-#lienzo.herr-rect,#lienzo.herr-elipse,#lienzo.herr-cuchilla{cursor:crosshair}
-#lienzo.herr-rect .capa,#lienzo.herr-elipse .capa,#lienzo.herr-cuchilla .capa{cursor:crosshair}
+#lienzo.herr-rect,#lienzo.herr-elipse,#lienzo.herr-cuchilla,#lienzo.herr-pluma{cursor:crosshair}
+#lienzo.herr-rect .capa,#lienzo.herr-elipse .capa,#lienzo.herr-cuchilla .capa,#lienzo.herr-pluma .capa{cursor:crosshair}
 #lienzo.pan,#lienzo.pan .capa{cursor:grab}
 #tres canvas{display:block}
 .etiqueta{position:absolute;left:10px;bottom:8px;color:var(--tenue);font-size:11px;pointer-events:none}
@@ -98,6 +103,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <button data-herr="mover" title="Mover (V)">↖ Mover</button>
     <button data-herr="rect" title="Rectángulo (R)">▭ Rect</button>
     <button data-herr="elipse" title="Elipse (O)">◯ Elipse</button>
+    <button data-herr="pluma" title="Pluma (P): clic = esquina · clic y arrastrar = curva · clic en el primer nodo o Enter cierra · Esc cancela">✒ Pluma</button>
     <button data-herr="cuchilla" title="Cortar (K): clic en una línea azul, o arrastra una recta de lado a lado (imán a bordes y esquinas; Mayús = ángulos de 15°; ⌘ sin imán)">✂ Cortar</button>
     <button id="bNodos" title="Editar nodos (Enter o doble clic)">⬩ Nodos</button>
     <span class="sep"></span>
@@ -380,6 +386,14 @@ function sobre() {
         const [x, y] = aPantalla(aMundo(c.t, n.p)), s = nodoSel && nodoSel.k === k && nodoSel.i === i;
         html += `<rect class="nodo${s ? ' sel' : ''}" data-nodo="${k},${i}" x="${x - 3}" y="${y - 3}" width="6" height="6"/>`;
       }));
+      // tiradores del nodo elegido y los de sus dos tramos (los de los vecinos que miran a él)
+      const r = nodoSel && c.anillos[nodoSel.k], m = r?.length;
+      if (r?.[nodoSel.i]) for (const [j, lado] of [[(nodoSel.i + m - 1) % m, 'sal'], [nodoSel.i, 'ent'], [nodoSel.i, 'sal'], [(nodoSel.i + 1) % m, 'ent']]) {
+        const n = r[j], v = n[lado];
+        if (!v) continue;
+        const [x0, y0] = aPantalla(aMundo(c.t, n.p)), [x1, y1] = aPantalla(aMundo(c.t, [n.p[0] + v[0], n.p[1] + v[1]]));
+        html += `<line class="brazo" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"/><circle class="tirador" data-tirador="${nodoSel.k},${j},${lado}" cx="${x1}" cy="${y1}" r="4"/>`;
+      }
     } else {
       const b = caja(c), q = esquinas(b).map((p) => aPantalla(aMundo(c.t, p)));
       html += `<polygon class="caja" points="${q.map((p) => p.join(',')).join(' ')}"/>`;
@@ -432,6 +446,23 @@ function sobre() {
     }
     const [x, y] = aPantalla(marcaIman.p);
     html += `<rect class="punto-iman" x="${x - 4}" y="${y - 4}" width="8" height="8"/>`;
+  }
+  if (herramienta === 'pluma' && pluma?.nodos.length) {
+    // lo dibujado hasta ahora y, si no se arrastra, el tramo hasta el cursor
+    const ns = [...pluma.nodos, ...(pluma.arrastre || !pluma.cursor ? [] : [nodo(pluma.cursor)])], P = (q) => aPantalla(q).join(' ');
+    const mas = (n, v) => (v ? [n.p[0] + v[0], n.p[1] + v[1]] : n.p);
+    let d = 'M' + P(ns[0].p);
+    for (let i = 1; i < ns.length; i++) {
+      const a = ns[i - 1], b = ns[i];
+      d += a.sal || b.ent ? `C${P(mas(a, a.sal))} ${P(mas(b, b.ent))} ${P(b.p)}` : `L${P(b.p)}`;
+    }
+    html += `<path class="pluma" d="${d}"/>`;
+    for (const n of pluma.nodos) { const [x, y] = aPantalla(n.p); html += `<rect class="pluma-nodo" x="${x - 3}" y="${y - 3}" width="6" height="6"/>`; }
+    const u = pluma.nodos.at(-1);
+    for (const v of [u.ent, u.sal]) if (v) {
+      const [x0, y0] = aPantalla(u.p), [x1, y1] = aPantalla(mas(u, v));
+      html += `<line class="brazo" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"/><circle class="pluma-nodo" cx="${x1}" cy="${y1}" r="3.5"/>`;
+    }
   }
   if (herramienta === 'cuchilla' && cuchilla?.puntos.length) {
     const pts = [...cuchilla.puntos, cuchilla.cursor].map(aPantalla);
@@ -510,8 +541,8 @@ function panel() {
       <label>Nodos<input disabled value="${c.anillos.reduce((n, r) => n + r.length, 0)}"></label></div>`;
     if (c.costuras?.length) html += `<div class="fila"><span class="nota" style="padding:0;align-self:center">Costuras: ${c.costuras.length}</span>
       <button id="bCosturas" title="Quitar los cortes pendientes de esta capa">Quitar</button></div>`;
-    if (nodos) html += `<div class="fila"><button id="bSimplificar" title="Quita nodos que no cambian la forma más de 0,15 % del diámetro">Simplificar nodos</button></div>
-      <p class="nota">Arrastra un nodo para moverlo · doble clic en el borde añade uno · Supr lo borra · flechas lo empujan.</p>`;
+    if (nodos) html += `<p class="nota">Arrastra un nodo o sus tiradores (⌥ los separa) · doble clic en un nodo: esquina ↔ curva ·
+      doble clic en el borde añade uno · Supr lo borra · flechas lo empujan.</p>`;
   } else if (selec.length > 1) {
     const B = cajaGrupo(capasSel()), n = selec.length, ok = B[0] <= B[2];
     const bot = (k, txt, t) => `<button data-alinear="${k}" title="${t}">${txt}</button>`;
@@ -574,7 +605,6 @@ $('#props').addEventListener('change', (e) => {
   commit();
 });
 $('#props').addEventListener('click', (e) => {
-  if (e.target.id === 'bSimplificar') simplificar();
   if (e.target.dataset.alinear) alinear(e.target.dataset.alinear);
   if (e.target.dataset.distribuir) distribuir(Number(e.target.dataset.distribuir));
   if (e.target.id === 'bCosturas') { delete capaSel().costuras; commit(); }
@@ -629,7 +659,7 @@ function todo() {
 function titulo() { document.title = `${JSON.stringify(doc) !== guardado ? '● ' : ''}${nombre} · Editor de símbolos`; }
 
 // ---------- ratón
-let arrastre = null, espacio = false, ultimoClic = { t: 0, id: null };
+let arrastre = null, espacio = false, ultimoClic = { t: 0, id: null }, ultimoNodo = 0;
 $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven en #sobre
   const m = deEvento(e), el = e.target, c = capaSel();
   if (e.button === 1 || espacio) { empezarGesto(); arrastre = { tipo: 'pan', x: e.clientX, y: e.clientY, cx: vista.cx, cy: vista.cy }; return; }
@@ -641,6 +671,14 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
     else cuchilla = { puntos: [p], cursor: p, nuevo: { x: e.clientX, y: e.clientY, sugerencia: el.dataset.sugerencia } };
     sobre();
     return;
+  }
+  if (herramienta === 'pluma') {
+    const ns = pluma?.nodos ?? [], r = dos.getBoundingClientRect(), [fx, fy] = ns.length ? aPantalla(ns[0].p) : [0, 0];
+    if (ns.length >= 2 && Math.hypot(e.clientX - r.left - fx, e.clientY - r.top - fy) < 8) { cerrarPluma(); return; }  // clic en el primero
+    const { p } = iman(m, ns.at(-1)?.p ?? null, e);
+    pluma ??= { nodos: [] };
+    pluma.nodos.push(nodo(p)); pluma.cursor = p; pluma.arrastre = { x: e.clientX, y: e.clientY };
+    sobre(); return;
   }
   if (herramienta !== 'mover') { arrastre = { tipo: 'dibujo', a: m, b: m }; return; }
   const id = Number(el.dataset.id) || null, unica = c?.id ?? null;
@@ -659,8 +697,14 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   } else if (el.dataset.asa) {
     const k = Number(el.dataset.asa), q = esquinas(caja(c));
     arrastre = { tipo: 'escala', q: q[k], o: q[(k + 2) % 4], O: aMundo(c.t, q[(k + 2) % 4]), t0: { ...c.t } };
+  } else if (el.dataset.tirador) {
+    const [k, i, lado] = el.dataset.tirador.split(',');
+    arrastre = { tipo: 'tirador', k: Number(k), i: Number(i), lado };
   } else if (el.dataset.nodo) {
     const [k, i] = el.dataset.nodo.split(',').map(Number);
+    const otraVez = nodoSel?.k === k && nodoSel?.i === i && e.timeStamp - ultimoNodo < 350;
+    ultimoNodo = e.timeStamp;
+    if (otraVez) { ultimoNodo = 0; alternarNodo(k, i); return; }
     nodoSel = { k, i }; arrastre = { tipo: 'nodo', k, i };
   } else if (id && nodos && id === unica) {
     if (doble) insertarNodo(m);
@@ -686,6 +730,19 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   todo();
 });
 addEventListener('pointermove', (e) => {
+  if (herramienta === 'pluma' && !arrastre) {
+    const P = pluma?.arrastre, m = deEvento(e);
+    if (P && (P.movido ||= Math.hypot(e.clientX - P.x, e.clientY - P.y) > 3)) {  // arrastrar: el nodo es una curva
+      const n = pluma.nodos.at(-1), v = [m[0] - n.p[0], m[1] - n.p[1]];
+      Object.assign(n, { sal: v, ent: [-v[0], -v[1]], tipo: 'espejo' });
+      marcaIman = null;
+    } else {
+      const { p, marca } = iman(m, pluma?.nodos.at(-1)?.p ?? null, e);
+      marcaIman = marca;
+      if (pluma) pluma.cursor = p;
+    }
+    sobre(); return;
+  }
   if (herramienta === 'cuchilla' && !arrastre) {
     const N = cuchilla?.nuevo;
     if (N && !N.recta && Math.hypot(e.clientX - N.x, e.clientY - N.y) > 4) N.recta = true;
@@ -741,6 +798,18 @@ addEventListener('pointermove', (e) => {
     c.anillos[A.k] = [...c.anillos[A.k]];
     c.anillos[A.k][A.i] = { ...c.anillos[A.k][A.i], p: aLocal(c.t, q) };  // los tiradores van con él
   }
+  if (A.tipo === 'tirador') {
+    // espejo: el opuesto, igual y al revés; suave: alineado, con su largo; ⌥ los separa (vivo)
+    const n0 = c.anillos[A.k][A.i], q = aLocal(c.t, m), v = [q[0] - n0.p[0], q[1] - n0.p[1]];
+    const otro = A.lado === 'ent' ? 'sal' : 'ent', n = { ...n0, [A.lado]: v };
+    if (e.altKey) n.tipo = 'vivo';
+    else if (n0.tipo === 'espejo') n[otro] = [-v[0], -v[1]];
+    else if (n0.tipo === 'suave' && n0[otro]) {
+      const k = Math.hypot(...n0[otro]) / (Math.hypot(...v) || 1);
+      n[otro] = [-v[0] * k, -v[1] * k];
+    }
+    c.anillos = c.anillos.map((r, j) => (j === A.k ? r.with(A.i, n) : r));
+  }
   if (A.tipo === 'escala') {
     // la esquina opuesta queda fija: la escala sale de la distancia a ella en el marco girado
     const [co, si] = trig(A.t0), dx = m[0] - A.O[0], dy = m[1] - A.O[1];
@@ -759,7 +828,7 @@ addEventListener('pointermove', (e) => {
     const co = Math.cos(r), si = Math.sin(r), ax = A.cl[0] * c.t.sx, ay = A.cl[1] * c.t.sy;
     Object.assign(c.t, { r, x: A.C[0] - (co * ax - si * ay), y: A.C[1] - (si * ax + co * ay) });
   }
-  if (!A.movido) { A.movido = true; cambioGeo(); if (A.tipo !== 'nodo') empezarFlotante(A.capas ?? [c]); }
+  if (!A.movido) { A.movido = true; cambioGeo(); if (A.tipo !== 'nodo' && A.tipo !== 'tirador') empezarFlotante(A.capas ?? [c]); }
   if (flota) { moverFlotante(A.G ?? mul(matCapa(c.t), inv(matCapa(A.t0)))); sobre(); } else refrescar(c);
   seguir3D(A.capas ?? [c]);
   pedirPanel();
@@ -771,6 +840,7 @@ function pedirPanel() {
   requestAnimationFrame(() => { panelPendiente = false; panel(); });
 }
 addEventListener('pointerup', (e) => {
+  if (pluma?.arrastre) { pluma.arrastre = null; return; }
   if (cuchilla?.nuevo) {
     const N = cuchilla.nuevo; cuchilla.nuevo = null;
     if (N.recta) { cuchilla.puntos.push(cuchilla.cursor); terminarCorte(); }  // arrastre: recta de donde se pulsó a donde se suelta
@@ -1004,23 +1074,19 @@ function borrarNodo() {
   else return;
   nodoSel = null; commit();
 }
-function simplificar() {
-  // Douglas-Peucker en el mundo sobre cada anillo cerrado; los nodos de una curva se quedan
-  const c = capaSel(), tol = 0.0015;
-  c.anillos = c.anillos.map((r) => {
-    const w = [...r.map((n) => aMundo(c.t, n.p)), aMundo(c.t, r[0].p)];
-    const guarda = new Uint8Array(w.length); guarda[0] = guarda[w.length - 1] = 1;
-    r.forEach((n, i) => { if (tramo(r, i) || tramo(r, (i + r.length - 1) % r.length)) guarda[i] = 1; });
-    const pila = [[0, w.length - 1]];
-    while (pila.length) {
-      const [a, b] = pila.pop(); let dm = 0, im = -1;
-      for (let i = a + 1; i < b; i++) { const d = distSeg(w[i], w[a], w[b])[0]; if (d > dm) { dm = d; im = i; } }
-      if (dm > tol) { guarda[im] = 1; pila.push([a, im], [im, b]); }
-    }
-    const nuevo = r.filter((_, i) => guarda[i]);
-    return nuevo.length >= 3 ? nuevo : r;
-  });
-  nodoSel = null; commit();
+// doble clic en un nodo: esquina (sin tiradores) <-> curva (tiradores en la dirección de la
+// recta entre sus vecinos, a un tercio de cada uno)
+function alternarNodo(k, i) {
+  const c = capaSel(), r = c.anillos[k], n = r[i], m = r.length;
+  let nuevo;
+  if (n.ent || n.sal) nuevo = { ...n, ent: null, sal: null, tipo: 'vivo' };
+  else {
+    const a = r[(i + m - 1) % m].p, b = r[(i + 1) % m].p, d = [b[0] - a[0], b[1] - a[1]], L = Math.hypot(...d) || 1;
+    const la = Math.hypot(n.p[0] - a[0], n.p[1] - a[1]) / 3, lb = Math.hypot(b[0] - n.p[0], b[1] - n.p[1]) / 3;
+    nuevo = { ...n, ent: [-d[0] / L * la, -d[1] / L * la], sal: [d[0] / L * lb, d[1] / L * lb], tipo: 'suave' };
+  }
+  c.anillos = c.anillos.map((x, j) => (j === k ? x.with(i, nuevo) : x));
+  commit();
 }
 
 // ---------- teclado
@@ -1037,7 +1103,10 @@ addEventListener('keydown', (e) => {
   else if (k === 'r') herr('rect');
   else if (k === 'o') herr('elipse');
   else if (k === 'k') herr('cuchilla');
+  else if (k === 'p') herr('pluma');
   else if (e.key === 'Enter' && cuchilla) terminarCorte();
+  else if (e.key === 'Enter' && pluma) cerrarPluma();
+  else if (e.key === 'Escape' && pluma) { pluma = null; marcaIman = null; sobre(); }  // otra vez Esc, a Mover
   else if (e.key === 'Enter' && c) { nodos = !nodos; nodoSel = null; todo(); }
   else if (e.key === 'Escape' && cuchilla) { cuchilla = null; sobre(); }  // cancela la línea; otra vez Esc, a Mover
   else if (e.key === 'Escape') { if (nodos) nodos = false; else selec = []; nodoSel = null; herramienta = 'mover'; todo(); }
@@ -1056,7 +1125,8 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => { if (e.code === 'Space') { espacio = false; lienzo.classList.remove('pan'); } });
 
 function herr(h) {
-  herramienta = h; cuchilla = null; marcaIman = null; if (h !== 'mover') nodos = false; todo();
+  herramienta = h; cuchilla = null; pluma = null; marcaIman = null; if (h !== 'mover') nodos = false; todo();
+  if (h === 'pluma') estado('Pluma: clic = esquina · clic y arrastrar = curva · clic en el primer nodo o Enter cierra · Esc cancela');
   if (h === 'cuchilla') {
     estado('Cuchilla: clic en una línea azul, o arrastra una recta de lado a lado (imán a bordes y esquinas · Mayús: 15° · ⌘: sin imán) · Esc para salir');
     pedirSugerencias();
@@ -1133,6 +1203,25 @@ async function pedirSugerencias() {
 // pieza pasa a ser una capa con la operación de la original y su origen en el centro
 // de su caja; la transformación de la original queda horneada en los nodos.
 let cuchilla = null;  // { puntos: [[x, y]...], cursor } en el mundo
+
+// ---------- pluma
+// Los nodos van en el mundo mientras se dibuja; al cerrar, una capa nueva con el origen en
+// el centro de su caja. Imán y Mayús (15°) como en la cuchilla.
+let pluma = null;  // { nodos, cursor, arrastre: {x, y, movido} mientras el botón sigue pulsado }
+function cerrarPluma() {
+  const ns = pluma?.nodos ?? [];
+  pluma = null; marcaIman = null;
+  if (ns.length < 3 && !(ns.length === 2 && ns.some((n) => n.ent || n.sal))) {
+    todo(); return estado('La pluma necesita 3 nodos (o 2 con curva) para cerrar una forma', true);
+  }
+  const xs = ns.map((n) => n.p[0]), ys = ns.map((n) => n.p[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const k = doc.capas.filter((c) => c.nombre.startsWith('Trazado')).length + 1;
+  doc.capas.push({ id: idSig++, nombre: `Trazado ${k}`, op: 'unir', visible: true,
+    anillos: [ns.map((n) => ({ ...n, p: [n.p[0] - cx, n.p[1] - cy] }))], t: { x: cx, y: cy, r: 0, sx: 1, sy: 1 } });
+  selec = [doc.capas.at(-1).id]; nodos = false; herramienta = 'mover';
+  commit();
+}
 $('#dos').addEventListener('dblclick', () => {
   if (!cuchilla) return;
   cuchilla.puntos.pop();  // el doble clic añadió dos veces el mismo punto
@@ -1164,10 +1253,12 @@ async function terminarCorte() {
   for (const { id, piezas: polis } of r.cortes) {
     const i = doc.capas.findIndex((c) => c.id === id), c = doc.capas[i];
     const nuevas = polis.map((poli, k) => {
-      const ext = poli[0], xs = ext.map((q) => q[0]), ys = ext.map((q) => q[1]);
+      // con curvas, las piezas llegan como nodos (curvas partidas por De Casteljau); de una
+      // capa sin ellas, como polígonos cerrados
+      const aNodos = (a) => (Array.isArray(a[0]) ? a.slice(0, -1).map(nodo) : a);  // sin el punto de cierre
+      const ext = aNodos(poli[0]), xs = ext.map((n) => n.p[0]), ys = ext.map((n) => n.p[1]);
       const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-      // las piezas llegan como polígonos (el servidor corta la curva ya aplanada): nodos vivos
-      const anillos = poli.map((a) => a.slice(0, -1).map(([x, y]) => nodo([x - cx, y - cy])));  // sin el punto de cierre
+      const anillos = poli.map((a) => aNodos(a).map((n) => ({ ...n, p: [n.p[0] - cx, n.p[1] - cy] })));
       const sufijo = k < 26 ? String.fromCharCode(97 + k) : String(k + 1);
       return { id: idSig++, nombre: `${c.nombre} · ${sufijo}`, op: c.op, visible: true, anillos, t: { x: cx, y: cy, r: 0, sx: 1, sy: 1 } };
     });
@@ -1413,11 +1504,11 @@ $('#bGenerar').addEventListener('click', async () => {
 });
 
 function migrar(d) {
-  d.version ??= 1;  // antes del campo version: el mismo formato que la 1
-  if (d.version === 1) {  // cada punto, un nodo vivo (sin tiradores)
-    for (const c of d.capas) c.anillos = c.anillos.map((r) => r.map(nodo));
-    d.version = 2;
-  }
+  // versión 1 (o sin campo version): cada punto, un nodo vivo (sin tiradores). Por anillo y
+  // no por versión: un parche al cerrar la pestaña rellenaba con los puntos del disco las
+  // capas sin cambios de un documento recién migrado, y quedaba mezclado
+  for (const c of d.capas) c.anillos = c.anillos.map((r) => (Array.isArray(r[0]) ? r.map(nodo) : r));
+  d.version = 2;
   return d;
 }
 async function abrir(s) {
@@ -1428,6 +1519,7 @@ async function abrir(s) {
   if (s === '+nuevo') r = { nombre: 'simbolo-nuevo', doc: { version: 1, origen: null, capas: [], ajustes: { ...ajustesBase } } };
   else r = await api(`/api/abrir?s=${encodeURIComponent(s)}`);
   if (r.error) return estado(r.error, true);
+  const original = JSON.stringify(r.doc), migrado = r.doc.version !== 2 || r.doc.capas.some((c) => c.anillos.some((a) => Array.isArray(a[0])));
   doc = migrar(r.doc); nombre = r.nombre; $('#nombre').value = nombre;
   enServidor = r.nombre === s;  // abierto de editor/<nombre>.json
   nombreGuardado = enServidor ? r.nombre : null;
@@ -1435,7 +1527,9 @@ async function abrir(s) {
   for (const c of doc.capas) c.id ??= idSig++;
   selec = []; nodos = false; nodoSel = null; herramienta = 'mover';
   const [w, h] = tam(); Object.assign(vista, { cx: 0, cy: 0, zoom: Math.min(w, h) * 0.8 });
-  historia = []; puntero = -1; guardado = JSON.stringify(doc);
+  // migrado: lo del disco aún es la versión 1, así que no está guardado (y el próximo guardado
+  // va entero, no como parche sobre capas «sin cambios» que en disco son puntos)
+  historia = []; puntero = -1; guardado = migrado && enServidor ? original : JSON.stringify(doc);
   if (s !== '+nuevo') history.replaceState(null, '', `?s=${s}`);
   $('#abrir').value = '';
   commit(); encuadrar();

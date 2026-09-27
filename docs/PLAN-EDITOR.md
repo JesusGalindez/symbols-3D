@@ -422,6 +422,24 @@ simetría del nodo; doble clic en un nodo alterna vivo/suave; **pluma (P)**: cli
 nodo vivo, clic y arrastrar = nodo suave, clic en el primero cierra. La cuchilla
 corta curvas partiéndolas por De Casteljau. «Simplificar nodos» desaparece.
 
+**4.3 hecho el 2026-09-26.** Tiradores del nodo elegido y de sus dos tramos (espejo,
+suave o vivo; ⌥ los separa); doble clic en un nodo: esquina ↔ curva; pluma (P) con imán y
+Mayús como la cuchilla; «Simplificar nodos» fuera. Sobre lo previsto:
+- **La cuchilla no corta curvas: corta la forma aplanada y luego rehace las curvas**
+  (`curvas.recurvar`). Así la topología (costuras, astillas, `polygonize`) no cambia.
+  Cada punto aplanado sabe su tramo y su t (`aplanar_t`); el cruce con una cuerda se
+  lleva a la curva, al mismo punto en las dos piezas que lo comparten, y los trozos de un
+  mismo tramo se rehacen por De Casteljau. Si la cuchilla cruza dos veces un tramo, la
+  arista entre los cruces es recta (ningún t del aplanado entre los dos).
+- Medido: `shou-cruz` en curvas con las 40 sugerencias → 30 piezas, 316 nodos (211 con
+  tirador), APROBADO. Su desviación en planta frente al original sin cortar (0,0044, en
+  la unión de −0,316, 0,387) es la misma con el polígono denso: viene de F1, no de aquí.
+- **Fallo encontrado al probar:** un documento de la versión 1 recién migrado, cerrado
+  con cambios, quedaba mezclado (el parche rellenaba con los puntos del disco las capas
+  «sin cambios») y no volvía a abrir. Ahora un documento migrado cuenta como no guardado
+  y `migrar()` convierte por anillo. La prueba de los 64 KB usa un documento denso de la
+  versión 1: con curvas, los documentos ya no llegan a 64 KB.
+
 **Criterio automático:** los 7 símbolos, importados a curvas y generados sin tocar,
 siguen APROBADOS por `verificar.py` (exportados a un temporal, regla 1); nodos por
 debajo del objetivo fijado en 4.0; un documento `version: 1` se abre y genera igual;

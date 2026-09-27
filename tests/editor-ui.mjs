@@ -1,7 +1,7 @@
 // Recorrido completo del editor en Chrome: mover, deshacer, escalar, rotar, dibujar,
 // restar, nodos, geometría exacta, guardado automático, generar y nombres protegidos.
 // Uso:  npm run test:ui     (código 1 si algo falla)
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { arrancar, abrirEditor, puntoEnCapa, comprobar, resumen } from './comun.mjs';
 
@@ -389,6 +389,75 @@ try {
     await s.close();
   }
 
+  // F4.3: pluma (un pétalo de 2 nodos, uno con curva), tiradores (espejo; ⌥ los separa),
+  // doble clic en un nodo (esquina ↔ curva) y la cuchilla sobre una elipse (piezas con curvas)
+  {
+    // lo que quedó guardado del documento migrado: la versión 1 intacta o todo nodos, nunca
+    // mezclado (un parche al cerrar rellenaba las capas sin cambios con los puntos del disco)
+    const guardadoViejo = JSON.parse(readFileSync(join(e.salida, 'editor', 'viejo.json')));
+    const formatos = new Set(guardadoViejo.capas.flatMap((c) => c.anillos.map((a) => Array.isArray(a[0]))));
+    comprobar(formatos.size === 1, 'lo guardado de un documento migrado no mezcla puntos y nodos');
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'viejo');
+    const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+    const ultima = () => s.evaluate(() => window.editor.doc().capas.at(-1));
+    const area = () => s.evaluate(() => window.editor.resultado().reduce((t, poli) => t + poli.reduce((u, a, k) => {
+      let d = 0; for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; }
+      return u + (k ? -1 : 1) * Math.abs(d / 2); }, 0), 0));
+    await s.keyboard.press('p');
+    const A = await cli(-0.45, -0.45), B = await cli(-0.1, -0.3), B2 = await cli(-0.02, -0.12);
+    await s.mouse.click(...A);
+    await s.mouse.move(...B); await s.mouse.down(); await s.mouse.move(...B2, { steps: 5 }); await s.mouse.up();
+    await s.mouse.click(...A);  // clic en el primero: cierra
+    const petalo = await ultima();
+    comprobar(petalo.nombre === 'Trazado 1' && petalo.anillos[0].length === 2 && petalo.anillos[0][1].tipo === 'espejo',
+      `la pluma cierra un pétalo: 2 nodos, el segundo con curva (${petalo.nombre}, ${petalo.anillos[0].map((n) => n.tipo)})`);
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    comprobar(/exacta/.test(await s.$eval('#etiqueta2d', (x) => x.textContent)), 'y el servidor lo aplana sin error');
+
+    await s.keyboard.press('o');
+    const E0 = await cli(0.15, 0.15), E1 = await cli(0.45, 0.4);
+    await s.mouse.move(...E0); await s.mouse.down(); await s.mouse.move(...E1, { steps: 4 }); await s.mouse.up();
+    await s.keyboard.press('Enter');  // nodos
+    const centro = async (q) => s.$eval(q, (n) => { const r = n.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    await s.mouse.click(...await centro('#sobre .nodo[data-nodo="0,0"]'));
+    comprobar(await s.$$eval('#sobre .tirador', (l) => l.length) === 4, 'un nodo elegido enseña sus 2 tiradores y los de sus vecinos que miran a él');
+    const T = await centro('#sobre .tirador[data-tirador="0,0,sal"]');
+    await s.mouse.move(...T); await s.mouse.down(); await s.mouse.move(T[0] + 25, T[1] - 15, { steps: 4 }); await s.mouse.up();
+    let n0 = (await ultima()).anillos[0][0];
+    comprobar(n0.ent[0] === -n0.sal[0] && n0.ent[1] === -n0.sal[1] && n0.tipo === 'espejo', 'arrastrar un tirador de un nodo espejo mueve el opuesto al revés');
+    const salAntes = n0.sal, Te = await centro('#sobre .tirador[data-tirador="0,0,ent"]');
+    await s.keyboard.down('Alt');
+    await s.mouse.move(...Te); await s.mouse.down(); await s.mouse.move(Te[0] - 10, Te[1] + 20, { steps: 4 }); await s.mouse.up();
+    await s.keyboard.up('Alt');
+    n0 = (await ultima()).anillos[0][0];
+    comprobar(n0.tipo === 'vivo' && n0.sal[0] === salAntes[0] && n0.sal[1] === salAntes[1], 'con ⌥ se separan: el nodo pasa a vivo y el otro tirador no se mueve');
+    const N1 = await centro('#sobre .nodo[data-nodo="0,1"]');
+    await s.mouse.click(...N1); await s.mouse.click(...N1);
+    let n1 = (await ultima()).anillos[0][1];
+    comprobar(n1.ent === null && n1.sal === null && n1.tipo === 'vivo', 'doble clic en un nodo curvo lo hace esquina');
+    await new Promise((r) => setTimeout(r, 400));
+    await s.mouse.click(...N1); await s.mouse.click(...N1);
+    n1 = (await ultima()).anillos[0][1];
+    comprobar(n1.tipo === 'suave' && n1.ent && n1.sal, 'y otro doble clic lo vuelve curva (suave)');
+    await s.keyboard.press('Escape'); await s.keyboard.press('Escape');
+
+    // la cuchilla parte la elipse por la mitad: dos piezas que siguen siendo curvas
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    const antes = await area(), nCapas = await s.evaluate(() => window.editor.doc().capas.length);
+    await s.keyboard.press('k');
+    const K0 = await cli(0.1, 0.27), K1 = await cli(0.5, 0.27);
+    await s.mouse.move(...K0); await s.mouse.down(); await s.mouse.move(...K1, { steps: 6 }); await s.mouse.up();
+    await s.waitForFunction((n) => window.editor.doc().capas.length === n + 1, { timeout: 10000 }, nCapas);
+    const mitades = await s.evaluate(() => window.editor.doc().capas.slice(-2).map((c) => c.anillos[0]));
+    comprobar(mitades.every((a) => a.length <= 6 && a.some((n) => n.ent || n.sal)),
+      `la cuchilla parte la elipse en dos piezas con curvas (${mitades.map((a) => a.length).join(' y ')} nodos, no cientos)`);
+    await s.keyboard.press('Escape');
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    const despues = await area();
+    comprobar(Math.abs(despues - antes) < 1e-5, `y la forma sigue igual (área ${antes.toFixed(6)} → ${despues.toFixed(6)})`);
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {
@@ -440,18 +509,23 @@ try {
   comprobar(Math.hypot(b2[0] - esperado[0], b2[1] - esperado[1]) < 1, 'el punto bajo el cursor se queda quieto al hacer zoom');
 
   // cerrar sin guardar y reabrir: lo del último segundo y medio llega por sendBeacon, como
-  // parche (el documento, con las piezas cortadas, ya pasa de los 64 KB que admite)
-  comprobar(await p.evaluate(() => JSON.stringify(window.editor.doc()).length) > 64 * 1024, 'el documento ya pasa de 64 KB');
-  await pausa(2000);  // el guardado automático de 1,5 s deja en disco los cortes
-  await p.keyboard.press('Escape');
-  await p.click('#capas li:nth-child(1)');
-  await p.keyboard.press('ArrowRight', { delay: 10 });
-  const xAntes = await p.evaluate(() => window.editor.doc().capas.at(-1).t.x);
-  await p.close({ runBeforeUnload: true });
+  // parche. Con curvas los documentos ya son pequeños; los que pasan de los 64 KB que admite
+  // son los densos de la versión 1 (lo guardado antes de F4): un círculo de 3000 puntos
+  await p.close();
+  writeFileSync(join(e.salida, 'editor', 'grande.json'), JSON.stringify({ version: 1, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+    capas: [{ id: 1, nombre: 'Disco', op: 'unir', visible: true, t: { x: 0, y: 0, r: 0, sx: 1, sy: 1 },
+      anillos: [Array.from({ length: 3000 }, (_, i) => [0.4 * Math.cos(i * 2 * Math.PI / 3000), 0.4 * Math.sin(i * 2 * Math.PI / 3000)])] }] }));
+  const { p: g } = await abrirEditor(e.chrome, e.url, 'grande');
+  comprobar(await g.evaluate(() => JSON.stringify(window.editor.doc()).length) > 64 * 1024, 'el documento pasa de 64 KB');
+  await pausa(2000);  // el guardado automático de 1,5 s deja en disco la versión migrada
+  await g.click('#capas li:nth-child(1)');
+  await g.keyboard.press('ArrowRight', { delay: 10 });
+  const xAntes = await g.evaluate(() => window.editor.doc().capas.at(-1).t.x);
+  await g.close({ runBeforeUnload: true });
   await pausa(800);
-  const { p: q } = await abrirEditor(e.chrome, e.url, 'prueba-ui');
+  const { p: q } = await abrirEditor(e.chrome, e.url, 'grande');
   const xDespues = await q.evaluate(() => window.editor.doc().capas.at(-1).t.x);
-  comprobar(Math.abs(xAntes - xDespues) < 1e-12, `cerrar la pestaña sin guardar y reabrir conserva el último cambio (${xAntes} → ${xDespues})`);
+  comprobar(xAntes !== 0 && Math.abs(xAntes - xDespues) < 1e-12, `cerrar la pestaña sin guardar y reabrir conserva el último cambio (${xAntes} → ${xDespues})`);
 } finally {
   await e.parar();
 }

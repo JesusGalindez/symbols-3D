@@ -159,7 +159,8 @@ def cortar(capas, linea):
     un corte solo no lo suelta). Las caras salen de polygonize() sobre el contorno y las
     líneas: vecinas con el mismo borde, vértice a vértice, y sin rendija al volver a unirlas.
     Devuelve las capas separadas con sus piezas, y las que la línea atraviesa sin separar
-    (el navegador guarda esa línea como costura)."""
+    (el navegador guarda esa línea como costura). Una capa con curvas recibe sus piezas
+    como nodos, con las curvas partidas por De Casteljau (curvas.recurvar)."""
     cortes, atraviesa = [], []
     for c in capas:
         forma = forma_capa(c["anillos"])
@@ -175,7 +176,11 @@ def cortar(capas, linea):
             # sin redondear: un corte que roza de forma tangente el redondeo de una esquina
             # deja un canal casi sin anchura, y redondear (a 6 o a 9 decimales) lo cruzaba
             # consigo mismo (pieza inválida). El documento guarda coordenadas completas igual
-            cortes.append({"id": c["id"], "piezas": a_listas(MultiPolygon(caras), None)})
+            piezas = a_listas(MultiPolygon(caras), None)
+            if any(a and isinstance(a[0], dict) for a in c["anillos"]):  # con curvas: se rehacen
+                ind = curvas.indice(c["anillos"])
+                piezas = [[[{**n, "tipo": tipo_nodo(n)} for n in curvas.recurvar(a, ind)] for a in poli] for poli in piezas]
+            cortes.append({"id": c["id"], "piezas": piezas})
         else:
             atraviesa.append(c["id"])
     return {"cortes": cortes, "atraviesa": atraviesa}
