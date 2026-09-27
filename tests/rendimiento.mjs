@@ -40,6 +40,29 @@ try {
     else console.log(`       ${texto}`);
     await p.close();
   }
+  // G7: mover 50 nodos elegidos a la vez en la capa mayor de shou-circular
+  {
+    const { p } = await abrirEditor(e.chrome, e.url, 'shou-circular');
+    await p.click('#capas li:last-child .nom'); await p.keyboard.press('Enter');
+    await p.evaluate(() => window.editor.elegirNodos(50));
+    const nodo = await p.$eval('#sobre .nodo.sel', (x) => { const r = x.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    const { mediana, p90 } = await p.evaluate(([x, y]) => {
+      const el = document.elementFromPoint(x, y);
+      el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: x, clientY: y, button: 0 }));
+      const t = [];
+      for (let i = 1; i <= 40; i++) {
+        const t0 = performance.now();
+        window.dispatchEvent(new PointerEvent('pointermove', { clientX: x + i * 2, clientY: y }));
+        document.querySelector('#lienzo').getBoundingClientRect();
+        t.push(performance.now() - t0);
+      }
+      window.dispatchEvent(new PointerEvent('pointerup', {}));
+      t.sort((a, b) => a - b);
+      return { mediana: t[20], p90: t[36] };
+    }, nodo);
+    comprobar(mediana <= PRESUPUESTO, `shou-circular, 50 nodos    mediana ${mediana.toFixed(1)} ms · p90 ${p90.toFixed(1)} ms (presupuesto ${PRESUPUESTO} ms)`);
+    await p.close();
+  }
 } finally {
   await e.parar();
 }

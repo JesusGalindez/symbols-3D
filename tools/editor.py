@@ -908,6 +908,14 @@ class Manejador(SimpleHTTPRequestHandler):
                                                             grupos=datos.get("grupos")))
             except Exception as e:
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
+        if self.path == "/api/lapiz":  # G7: la polilínea a mano alzada -> nodos con curvas
+            try:
+                pts = [tuple(q) for q in datos["puntos"]]
+                cerrado = bool(datos.get("cerrado"))
+                nodos = curvas.ajustar_anillo(pts, float(datos.get("tol", 0.002)), cerrado=cerrado)[0]
+                return self.responder({"nodos": [{**n, "tipo": tipo_nodo(n)} for n in nodos]})
+            except Exception as e:
+                return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
         if self.path == "/api/svg":
             try:
                 texto = exportar_svg(datos["capas"], datos.get("simetria"), datos["color"], datos.get("grupos"))

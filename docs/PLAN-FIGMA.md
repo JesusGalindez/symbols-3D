@@ -558,6 +558,22 @@ APROBADO.
 un trazo de lápiz de 300 puntos llega con ≤ 30 nodos y a menos de 0,002 del dibujo;
 presupuesto de 16 ms moviendo 50 nodos a la vez en `shou-circular`.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). Sobre lo previsto:
+- En modo nodos, arrastrar en vacío **o sobre la propia forma** abre el marco (o el
+  lazo, con Q) de nodos; un clic en vacío sigue saliendo de los nodos. La caja de los
+  nodos elegidos tiene sus asas de escalar y girar, como la de las capas.
+- El lápiz usa `curvas.ajustar_anillo(…, cerrado=False)`, el mismo ajuste que al abrir
+  los símbolos, ahora también para caminos abiertos (`/api/lapiz`).
+- La pluma con ⇧ va en pasos de 45° (la cuchilla sigue en 15°) y su imán engancha también
+  a los nodos de las demás capas.
+- De paso: el arrastre de «curvar» (G6) hacía flotar la capa entera con una
+  transformación NaN mientras se arrastraba (al soltar quedaba bien); ahora todos los
+  arrastres de nodos van por `EDITAN_NODOS`.
+- La prueba de cerrar la pestaña sin guardar esperaba 800 ms fijos a `sendBeacon`; con
+  la máquina cargada no siempre bastaba: ahora espera a que el cambio esté en disco.
+Medido: pytest 75, `test:ui` 161 en verde; mover 50 nodos de `shou-circular` a la vez,
+5,1 ms de mediana (en `tests/rendimiento.mjs`).
+
 **Tarea de usuario (5 min):** dibujar con el lápiz un trazo curvo de pincel (camino
 abierto), darle grosor y generar. Hecho si: APROBADO.
 

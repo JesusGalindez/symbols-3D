@@ -116,7 +116,8 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 .flotante-espejo .capa.unir{fill:var(--laca)}
 .flotante-espejo .capa.restar{fill:var(--fondo)}
 #lienzo .costura,#flotante .costura{fill:none;stroke:#ff5a5a;stroke-width:1.5;stroke-dasharray:5 4;pointer-events:none}
-#lienzo.herr-rect,#lienzo.herr-elipse,#lienzo.herr-cuchilla,#lienzo.herr-pluma{cursor:crosshair}
+#lienzo.herr-rect,#lienzo.herr-elipse,#lienzo.herr-cuchilla,#lienzo.herr-pluma,#lienzo.herr-lapiz{cursor:crosshair}
+#lienzo.herr-lapiz .capa{cursor:crosshair}
 #lienzo.herr-rect .capa,#lienzo.herr-elipse .capa,#lienzo.herr-cuchilla .capa,#lienzo.herr-pluma .capa{cursor:crosshair}
 #lienzo.pan,#lienzo.pan .capa{cursor:grab}
 #tres canvas{display:block}
@@ -148,6 +149,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <button data-herr="rect" title="Rectángulo (R)">▭ Rect</button>
     <button data-herr="elipse" title="Elipse (O)">◯ Elipse</button>
     <button data-herr="pluma" title="Pluma (P): clic = esquina · clic y arrastrar = curva · clic en el primer nodo cierra · Enter o Esc: camino abierto con trazo">✒ Pluma</button>
+    <button data-herr="lapiz" title="Lápiz (⇧P): a mano alzada; al soltar pasa a curvas (cerca del principio: forma cerrada)">✎ Lápiz</button>
     <button data-herr="cuchilla" title="Cortar (K): clic en una línea azul, o arrastra una recta de lado a lado (imán a bordes y esquinas; Mayús = ángulos de 15°; ⌘ sin imán)">✂ Cortar</button>
     <button id="bNodos" title="Editar nodos (Enter o doble clic)">⬩ Nodos</button>
     <span class="sep"></span>
@@ -179,6 +181,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <dt>P</dt><dd>Pluma: clic esquina, clic y arrastrar curva; clic en el primero cierra; Enter o Esc deja un camino abierto con trazo; clic en un extremo de un camino lo alarga</dd>
     <dt>⇧⌘O</dt><dd>Contornear trazo (pasa a forma rellena)</dd><dt>⌘E</dt><dd>Aplanar las elegidas (seguidas) en una forma</dd>
 
+    <dt>⇧P</dt><dd>Lápiz: a mano alzada, pasa a curvas al soltar</dd>
     <dt>K</dt><dd>Cuchilla: clic en una línea azul o arrastrar una recta</dd><dt>Enter · doble clic</dt><dd>Nodos de la capa elegida</dd></dl>
   <h4>Selección</h4><dl><dt>Clic</dt><dd>Una capa</dd><dt>⇧ + clic</dt><dd>Sumar o quitar (también en la lista)</dd>
     <dt>Arrastrar en vacío</dt><dd>Recuadro: lo que toca</dd><dt>⌘A</dt><dd>Todas</dd><dt>Esc</dt><dd>Salir de nodos, soltar la selección</dd></dl>
@@ -193,6 +196,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
   <h4>Capas</h4><dl><dt>⇧⌘L</dt><dd>Bloquear (no se elige en el lienzo)</dd><dt>⇧⌘H</dt><dd>Mostrar u ocultar</dd>
     <dt>⌘R</dt><dd>Renombrar</dd><dt>Tab · ⇧Tab</dt><dd>La capa de encima · la de debajo</dd></dl>
   <h4>Nodos</h4><dl><dt>Doble clic en el borde</dt><dd>Añadir un nodo</dd><dt>Doble clic en un nodo</dt><dd>Esquina ↔ curva</dd>
+    <dt>⇧ + clic · arrastrar en vacío</dt><dd>Varios nodos (marco; Q: lazo)</dd><dt>⌘J · ⇧⌘M</dt><dd>Unir extremos (cerrar o juntar dos caminos) · fusionar nodos</dd>
     <dt>⌥ + tirador</dt><dd>Separar los tiradores</dd><dt>⌘ + arrastrar un tramo</dt><dd>Curvarlo</dd><dt>Radio (panel)</dt><dd>Redondear esquinas (de la capa o del nodo)</dd><dt>Supr</dt><dd>Borrar el nodo</dd></dl>
   <h4>Precisión</h4><dl><dt>⇧ al mover</dt><dd>Un solo eje</dd><dt>⇧ al girar</dt><dd>De 15° en 15°</dd>
     <dt>⇧ al escalar</dt><dd>Con proporción</dd><dt>⌘ al arrastrar</dt><dd>Sin imán</dd></dl>
@@ -559,7 +563,7 @@ function sobre() {
     cont.setAttribute('transform', marcoCapa(c.t));
     if (nodos) {
       c.anillos.forEach((r, k) => r.forEach((n, i) => {
-        const [x, y] = aPantalla(aMundo(c.t, n.p)), s = nodoSel && nodoSel.k === k && nodoSel.i === i;
+        const [x, y] = aPantalla(aMundo(c.t, n.p)), s = esElegido(k, i);
         html += `<rect class="nodo${s ? ' sel' : ''}" data-nodo="${k},${i}" x="${x - 3}" y="${y - 3}" width="6" height="6"/>`;
       }));
       // tiradores del nodo elegido y los de sus dos tramos (los de los vecinos que miran a él)
@@ -650,6 +654,19 @@ function sobre() {
     html += herramienta === 'elipse'
       ? `<ellipse class="dibujo" cx="${(x0 + x1) / 2}" cy="${(y0 + y1) / 2}" rx="${Math.abs(x1 - x0) / 2}" ry="${Math.abs(y1 - y0) / 2}"/>`
       : `<rect class="dibujo" x="${Math.min(x0, x1)}" y="${Math.min(y0, y1)}" width="${Math.abs(x1 - x0)}" height="${Math.abs(y1 - y0)}"/>`;
+  }
+  if (c && nodos && elegidos().length > 1) {  // la caja de los nodos elegidos, con sus asas
+    const B = arrastre?.cajaN ?? cajaNodos(c), q = esquinas(B).map(aPantalla);
+    html += `<polygon class="caja" points="${q.map((p) => p.join(',')).join(' ')}"/>`;
+    const [ax, ay] = aPantalla([(B[0] + B[2]) / 2, B[3]]);
+    html += `<line class="caja" x1="${ax}" y1="${ay}" x2="${ax}" y2="${ay - 22}"/><circle class="asa rot" data-asa-n="rot" cx="${ax}" cy="${ay - 22}" r="5"/>`;
+    q.forEach(([x, y], k) => { html += `<rect class="asa" data-asa-n="${k}" x="${x - 4}" y="${y - 4}" width="8" height="8"/>`; });
+  }
+  if (arrastre?.tipo === 'lapiz') html += `<path class="pluma" style="fill:none" d="M${arrastre.puntos.map((q) => aPantalla(q).join(' ')).join('L')}"/>`;
+  if (arrastre?.tipo === 'marcoNodos' && arrastre.movido) {
+    html += arrastre.lazo ? `<path class="dibujo" d="M${arrastre.puntos.map((q) => aPantalla(q).join(' ')).join('L')}Z"/>`
+      : (() => { const [x0, y0] = aPantalla(arrastre.a), [x1, y1] = aPantalla(arrastre.b);
+        return `<rect class="dibujo" x="${Math.min(x0, x1)}" y="${Math.min(y0, y1)}" width="${Math.abs(x1 - x0)}" height="${Math.abs(y1 - y0)}"/>`; })();
   }
   html += dibujoGuias() + dibujoMedidas();
   $('#asas').innerHTML = html;
@@ -1107,11 +1124,12 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
     }
     const ns = pluma?.nodos ?? [], [fx, fy] = ns.length ? aPantalla(ns[0].p) : [0, 0];
     if (ns.length >= 2 && Math.hypot(e.clientX - r.left - fx, e.clientY - r.top - fy) < 8) { cerrarPluma(); return; }  // clic en el primero
-    const { p } = iman(m, ns.at(-1)?.p ?? null, e);
+    const { p } = iman(m, ns.at(-1)?.p ?? null, e, fuentePluma(), Math.PI / 4);
     pluma ??= { nodos: [] };
     pluma.nodos.push(nodo(p)); pluma.cursor = p; pluma.arrastre = { x: e.clientX, y: e.clientY };
     sobre(); return;
   }
+  if (herramienta === 'lapiz') { arrastre = { tipo: 'lapiz', puntos: [m], x: e.clientX, y: e.clientY }; return; }
   if (herramienta !== 'mover') { arrastre = { tipo: 'dibujo', a: m, b: m }; return; }
   const id = Number(el.dataset.id) || null, unica = c?.id ?? null;
   const doble = id && id === ultimoClic.id && e.timeStamp - ultimoClic.t < 350;
@@ -1132,17 +1150,32 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   } else if (el.dataset.tirador) {
     const [k, i, lado] = el.dataset.tirador.split(',');
     arrastre = { tipo: 'tirador', k: Number(k), i: Number(i), lado };
+  } else if (el.dataset.asaN) {  // escalar o girar los nodos elegidos
+    const B = cajaNodos(c), orig = origNodos(c);
+    if (el.dataset.asaN === 'rot') { const C = [(B[0] + B[2]) / 2, (B[1] + B[3]) / 2]; arrastre = { tipo: 'nrot', C, a0: Math.atan2(m[1] - C[1], m[0] - C[0]), orig, cajaN: B }; }
+    else { const q = esquinas(B), k = Number(el.dataset.asaN); arrastre = { tipo: 'nescala', q: q[k], O: q[(k + 2) % 4], orig, cajaN: B }; }
   } else if (el.dataset.nodo) {
     const [k, i] = el.dataset.nodo.split(',').map(Number);
+    if (e.shiftKey) {  // ⇧ + clic: suma o quita
+      const base = elegidos();
+      nodosMulti = esElegido(k, i) ? base.filter((q) => q.k !== k || q.i !== i) : [...base, { k, i }];
+      nodoSel = nodosMulti.at(-1) ?? null; if (nodosMulti.length < 2) nodosMulti = [];
+      todo(); return;
+    }
+    if (esElegido(k, i) && elegidos().length > 1) {  // arrastrar uno de varios: todos
+      nodoSel = { k, i }; arrastre = { tipo: 'nodos', m0: m, orig: origNodos(c) };
+      todo(); return;
+    }
     const otraVez = nodoSel?.k === k && nodoSel?.i === i && e.timeStamp - ultimoNodo < 350;
     ultimoNodo = e.timeStamp;
     if (otraVez) { ultimoNodo = 0; alternarNodo(k, i); return; }
-    nodoSel = { k, i }; arrastre = { tipo: 'nodo', k, i };
+    nodoSel = { k, i }; nodosMulti = []; arrastre = { tipo: 'nodo', k, i };
   } else if (id && nodos && id === unica && e.metaKey) {  // curvar (G6)
     const t = tramoCercano(c, m);
     if (t && !(c.abierto && t.i === c.anillos[t.k].length - 1)) arrastre = { tipo: 'curvar', ...t, r0: c.anillos[t.k] };
-  } else if (id && nodos && id === unica) {
+  } else if (id && nodos && id === unica) {  // sobre la propia forma: doble clic añade un nodo; arrastrar, marco o lazo
     if (doble) insertarNodo(m);
+    else arrastre = { tipo: 'marcoNodos', a: m, b: m, puntos: [m], lazo, x: e.clientX, y: e.clientY, sumar: e.shiftKey, sobreForma: true };
   } else if (id) {
     // con grupos: se elige el de más arriba (o el hijo del grupo en el que se entró); un
     // doble clic sobre un grupo elegido entra en él; ⌘ + clic elige la capa misma
@@ -1162,6 +1195,8 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
     else selec = [sid];
     if (sid !== unica) { nodos = false; nodoSel = null; }
     arrastre = { tipo: 'mover', m0: m, ...grupo(), abreNodos, alSoltar, alt: e.altKey };
+  } else if (nodos && c && !id) {  // en vacío con los nodos abiertos: marco (o lazo, Q) de nodos
+    arrastre = { tipo: 'marcoNodos', a: m, b: m, puntos: [m], lazo, x: e.clientX, y: e.clientY, sumar: e.shiftKey };
   } else {  // en vacío: recuadro de selección (con ⇧, suma a la que hay)
     const base = e.shiftKey ? [...selec] : [];
     selec = base; nodos = false; nodoSel = null;
@@ -1181,7 +1216,7 @@ addEventListener('pointermove', (e) => {
       Object.assign(n, { sal: v, ent: [-v[0], -v[1]], tipo: 'espejo' });
       marcaIman = null;
     } else {
-      const { p, marca } = iman(m, pluma?.nodos.at(-1)?.p ?? null, e);
+      const { p, marca } = iman(m, pluma?.nodos.at(-1)?.p ?? null, e, fuentePluma(), Math.PI / 4);
       marcaIman = marca;
       if (pluma) pluma.cursor = p;
     }
@@ -1202,6 +1237,11 @@ addEventListener('pointermove', (e) => {
     seguirGesto(); return;
   }
   if (A.tipo === 'dibujo') { A.b = m; sobre(); return; }
+  if (A.tipo === 'lapiz') {
+    const u = aPantalla(A.puntos.at(-1)), q = aPantalla(m);
+    if (Math.hypot(q[0] - u[0], q[1] - u[1]) >= 2) { A.puntos.push(m); sobre(); }
+    return;
+  }
   if (A.tipo === 'recuadro') {
     A.b = m; A.movido ||= Math.hypot(e.clientX - A.x, e.clientY - A.y) > 3;
     if (!A.movido) return;
@@ -1251,6 +1291,24 @@ addEventListener('pointermove', (e) => {
     c.anillos[A.k] = [...c.anillos[A.k]];
     c.anillos[A.k][A.i] = { ...c.anillos[A.k][A.i], p: aLocal(c.t, q) };  // los tiradores van con él
   }
+  if (A.tipo === 'marcoNodos') {
+    A.b = m; A.movido ||= Math.hypot(e.clientX - A.x, e.clientY - A.y) > 3;
+    if (A.lazo) A.puntos.push(m);
+    sobre(); return;
+  }
+  if (A.tipo === 'nodos') transformarNodos(c, A.orig, [1, 0, 0, 1, m[0] - A.m0[0], m[1] - A.m0[1]]);
+  if (A.tipo === 'nrot') {
+    let th = Math.atan2(m[1] - A.C[1], m[0] - A.C[0]) - A.a0;
+    if (e.shiftKey) th = Math.round(th / (Math.PI / 12)) * Math.PI / 12;
+    const co = Math.cos(th), si = Math.sin(th), [x, y] = A.C;
+    transformarNodos(c, A.orig, [co, si, -si, co, x - co * x + si * y, y - si * x - co * y]);
+  }
+  if (A.tipo === 'nescala') {
+    const lim = (v) => (Math.abs(v) < 1e-3 ? (Math.sign(v) || 1) * 1e-3 : v);
+    let kx = lim((m[0] - A.O[0]) / (A.q[0] - A.O[0] || 1e-9)), ky = lim((m[1] - A.O[1]) / (A.q[1] - A.O[1] || 1e-9));
+    if (e.shiftKey) { const k = Math.max(Math.abs(kx), Math.abs(ky)); kx = Math.sign(kx) * k; ky = Math.sign(ky) * k; }
+    transformarNodos(c, A.orig, [kx, 0, 0, ky, A.O[0] * (1 - kx), A.O[1] * (1 - ky)]);
+  }
   if (A.tipo === 'curvar') {
     // el tramo pasa a ser la cúbica que va por el punto del ratón en su t: se mueven los dos
     // controles lo mismo, δ = (q − B(t)) / (3t(1 − t)); los extremos no se mueven
@@ -1292,7 +1350,7 @@ addEventListener('pointermove', (e) => {
     const co = Math.cos(r), si = Math.sin(r), ax = A.cl[0] * c.t.sx, ay = A.cl[1] * c.t.sy;
     Object.assign(c.t, { r, x: A.C[0] - (co * ax - si * ay), y: A.C[1] - (si * ax + co * ay) });
   }
-  if (!A.movido) { A.movido = true; cambioGeo(); if (A.tipo !== 'nodo' && A.tipo !== 'tirador') empezarFlotante(A.capas ?? [c]); }
+  if (!A.movido) { A.movido = true; cambioGeo(); if (!EDITAN_NODOS.has(A.tipo)) empezarFlotante(A.capas ?? [c]); }
   if (flota) { moverFlotante(A.G ?? mul(matCapa(c.t), inv(matCapa(A.t0)))); sobre(); } else refrescar(c);
   seguir3D(A.capas ?? [c]);
   pedirPanel();
@@ -1315,6 +1373,18 @@ addEventListener('pointerup', (e) => {
   if (!A) return;
   if (A.tipo === 'pan') { terminarGesto(); return; }
   if (A.tipo === 'recuadro') { todo(); return; }
+  if (A.tipo === 'lapiz') { terminarLapiz(A.puntos); return; }
+  if (A.tipo === 'marcoNodos') {
+    const c = capaSel();
+    if (!A.movido && A.sobreForma) { todo(); return; }  // un clic sobre la forma no cambia nada
+    if (!A.movido) { nodos = false; selec = []; nodoSel = null; nodosMulti = []; todo(); return; }  // clic en vacío: fuera
+    const dentro = (q) => { if (!A.lazo) return q[0] >= Math.min(A.a[0], A.b[0]) && q[0] <= Math.max(A.a[0], A.b[0]) && q[1] >= Math.min(A.a[1], A.b[1]) && q[1] <= Math.max(A.a[1], A.b[1]);
+      let d = false; const P = A.puntos; for (let i = 0, j = P.length - 1; i < P.length; j = i++) if ((P[i][1] > q[1]) !== (P[j][1] > q[1]) && q[0] < (P[j][0] - P[i][0]) * (q[1] - P[i][1]) / (P[j][1] - P[i][1]) + P[i][0]) d = !d; return d; };
+    const nuevos = c.anillos.flatMap((r, k) => r.map((n, i) => ({ k, i, n }))).filter(({ n }) => dentro(aMundo(c.t, n.p))).map(({ k, i }) => ({ k, i }));
+    const todos = A.sumar ? [...elegidos(), ...nuevos.filter((q) => !esElegido(q.k, q.i))] : nuevos;
+    nodoSel = todos[0] ?? null; nodosMulti = todos.length > 1 ? todos : [];
+    todo(); return;
+  }
   if (A.tipo === 'guia') {  // de vuelta a la regla: se borra
     const r = dos.getBoundingClientRect(), fuera = A.eje === 'y' ? e.clientY - r.top < 18 : e.clientX - r.left < 18;
     if (fuera) doc.guias[A.eje].splice(A.i, 1);
@@ -1508,6 +1578,26 @@ function toca(W, [x0, y0, x1, y1]) {
 }
 
 // ---------- nodos
+// arrastres que cambian nodos de la capa (no la capa entera: esa flota en #flotante)
+const EDITAN_NODOS = new Set(['nodo', 'tirador', 'curvar', 'nodos', 'nescala', 'nrot']);
+// Varios nodos (G7): ⇧ + clic suma o quita, arrastrar en vacío (o Q, lazo) elige los de
+// dentro; se mueven, empujan, escalan, giran y borran juntos. nodoSel es el principal
+// (sus tiradores y el panel); nodosMulti, todos (vacío = solo nodoSel).
+let nodosMulti = [], lazo = false;
+const elegidos = () => (nodoSel ? (nodosMulti.length ? nodosMulti : [nodoSel]) : []);
+const esElegido = (k, i) => elegidos().some((q) => q.k === k && q.i === i);
+function cajaNodos(c) {  // la caja de los nodos elegidos, en el mundo
+  return unirCajas(elegidos().map(({ k, i }) => { const [x, y] = aMundo(c.t, c.anillos[k][i].p); return [x, y, x, y]; }));
+}
+// aplica la afín G del mundo a los nodos elegidos (sus tiradores, sin traslación)
+function transformarNodos(c, orig, G) {
+  const [a, b, cc, d, e, f] = mul(inv(matCapa(c.t)), mul(G, matCapa(c.t))), L = (v) => v && [a * v[0] + cc * v[1], b * v[0] + d * v[1]];
+  c.anillos = c.anillos.map((r, k) => r.map((n, i) => {
+    const o = orig.get(`${k},${i}`);
+    return o ? { ...n, p: [a * o.p[0] + cc * o.p[1] + e, b * o.p[0] + d * o.p[1] + f], ent: L(o.ent), sal: L(o.sal) } : n;
+  }));
+}
+const origNodos = (c) => new Map(elegidos().map(({ k, i }) => [`${k},${i}`, c.anillos[k][i]]));
 // el tramo del nodo i al siguiente: sus cuatro puntos de control (en la capa) o null si es recto
 function tramo(r, i) {
   const a = r[i], b = r[(i + 1) % r.length];
@@ -1575,12 +1665,47 @@ function insertarNodo(m) {
   nodoSel = { k: mejor.k, i: i + 1 };
   commit();
 }
-function borrarNodo() {
-  const c = capaSel(), r = c.anillos[nodoSel.k];
-  if (r.length > (c.abierto ? 2 : 3)) c.anillos = c.anillos.map((a, k) => k === nodoSel.k ? a.toSpliced(nodoSel.i, 1) : a);
-  else if (nodoSel.k > 0) c.anillos = c.anillos.toSpliced(nodoSel.k, 1);  // un hueco de 3 nodos desaparece entero
-  else return;
-  nodoSel = null; commit();
+function borrarNodo() {  // los elegidos; un anillo que se queda corto desaparece (salvo el primero)
+  const c = capaSel(), minimo = c.abierto ? 2 : 3, fuera = elegidos();
+  const anillos = c.anillos.map((a, k) => a.filter((_, i) => !fuera.some((q) => q.k === k && q.i === i)));
+  if (anillos[0].length < minimo) return estado(`El contorno necesita ${minimo} nodos como mínimo`, true);
+  c.anillos = anillos.filter((a, k) => k === 0 || a.length >= minimo);
+  nodoSel = null; nodosMulti = []; commit();
+}
+// ⇧⌘M: los elegidos seguidos en un anillo y a menos de 1e-3 del primero de la tanda se
+// funden en uno (en su punto medio; el tirador de entrada del primero y el de salida del último)
+function fusionarNodos() {
+  const c = capaSel(); if (!c || elegidos().length < 2) return;
+  let n0 = 0;
+  c.anillos = c.anillos.map((r, k) => {
+    const out = [];
+    for (let i = 0; i < r.length; i++) {
+      const u = out.at(-1);
+      if (u && u._k && esElegido(k, i) && Math.hypot(r[i].p[0] - u._p0[0], r[i].p[1] - u._p0[1]) < 1e-3) {
+        u._suma[0] += r[i].p[0]; u._suma[1] += r[i].p[1]; u._n++; u.sal = r[i].sal; n0++; continue;
+      }
+      out.push(esElegido(k, i) ? { ...r[i], _k: true, _p0: r[i].p, _suma: [...r[i].p], _n: 1 } : r[i]);
+    }
+    return out.map(({ _k, _p0, _suma, _n, ...n }) => (_k ? { ...n, p: [_suma[0] / _n, _suma[1] / _n], tipo: 'vivo' } : n));
+  });
+  nodoSel = null; nodosMulti = []; commit();
+  estado(n0 ? `Fundidos ${n0} nodo(s)` : 'Ningún par de nodos elegidos seguidos a menos de 0,001', !n0);
+}
+// ⌘J: una capa abierta se cierra; dos abiertas se unen en una por los extremos más cercanos
+// (si se tocan a menos de 1e-3, en un solo nodo)
+function unirExtremos() {
+  const cs = capasSel().filter((c) => c.abierto && c.anillos.length === 1);
+  if (cs.length === 1) { delete cs[0].abierto; selec = [cs[0].id]; commit(); return estado('Camino cerrado'); }
+  if (cs.length !== 2) return estado('⌘J: elige un camino abierto (se cierra) o dos (se unen)', true);
+  const [a, b] = cs.map((c) => nodosMundo(c)[0].map((n, i) => ({ ...c.anillos[0][i], ...n })));
+  const d = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]), inv = (ns) => ns.toReversed().map((n) => ({ ...n, ent: n.sal, sal: n.ent }));
+  const op = [[a, b], [a, inv(b)], [inv(a), b], [inv(a), inv(b)]].map(([x, y]) => [x, y, d(x.at(-1).p, y[0].p)]).sort((p, q) => p[2] - q[2])[0];
+  let [x, y] = op;
+  if (op[2] < 1e-3) { y = [{ ...y[0], ent: x.at(-1).ent }, ...y.slice(1)]; x = x.slice(0, -1); }
+  const c = cs[0];
+  ponerMundo(c, [[...x, ...y]]);
+  doc.capas = doc.capas.filter((k) => k !== cs[1]);
+  selec = [c.id]; commit(); estado('Caminos unidos');
 }
 // doble clic en un nodo: esquina (sin tiradores) <-> curva (tiradores en la dirección de la
 // recta entre sus vecinos, a un tercio de cada uno)
@@ -1619,6 +1744,8 @@ addEventListener('keydown', (e) => {
   if (mod && k === 'r') { e.preventDefault(); renombrar(); return; }
   if (mod && e.shiftKey && k === 'o') { e.preventDefault(); contornear(capasSel()); return; }
   if (mod && k === 'e') { e.preventDefault(); aplanarSel(); return; }
+  if (mod && !e.shiftKey && k === 'j') { e.preventDefault(); unirExtremos(); return; }
+  if (mod && e.shiftKey && k === 'm') { e.preventDefault(); fusionarNodos(); return; }
   if (mod && (e.key === '+' || e.key === '=' || e.key === '-')) { e.preventDefault(); zoomPaso(e.key === '-' ? 0.5 : 2); return; }
   if (mod) return;
   if (e.altKey && e.shiftKey && ['KeyU', 'KeyS', 'KeyI', 'KeyE'].includes(e.code)) {
@@ -1630,6 +1757,8 @@ addEventListener('keydown', (e) => {
   if (e.shiftKey && e.code === 'Digit2') { ajustarVista(true); return; }
   if (e.shiftKey && k === 'h') { voltear(0); return; }
   if (e.shiftKey && k === 'r') { verReglas = !verReglas; reglas(); return; }
+  if (!e.shiftKey && k === 'q' && nodos) { lazo = !lazo; estado(lazo ? 'Lazo: arrastra alrededor de los nodos que quieras (Q para volver al marco)' : 'Marco de nodos'); return; }
+  if (e.shiftKey && k === 'p') { herr('lapiz'); return; }
   if (e.shiftKey && k === 'v') { voltear(1); return; }
   if (e.key === 'Tab') { e.preventDefault(); hermana(e.shiftKey ? -1 : 1); return; }
   if (e.shiftKey && e.code === 'Digit0') { vistaInicial(); vistaCambiada(); return; }
@@ -1655,10 +1784,8 @@ addEventListener('keydown', (e) => {
     e.preventDefault();
     const paso = e.shiftKey ? 0.01 : 0.001;
     const d = { ArrowLeft: [-paso, 0], ArrowRight: [paso, 0], ArrowUp: [0, paso], ArrowDown: [0, -paso] }[e.key];
-    if (nodos && nodoSel) {
-      const n = c.anillos[nodoSel.k][nodoSel.i], w = aMundo(c.t, n.p), { k: kk, i } = nodoSel;
-      c.anillos = c.anillos.map((r, j) => j === kk ? r.with(i, { ...n, p: aLocal(c.t, [w[0] + d[0], w[1] + d[1]]) }) : r);
-    } else for (const k of capasSel()) { k.t.x += d[0]; k.t.y += d[1]; }
+    if (nodos && nodoSel) transformarNodos(c, origNodos(c), [1, 0, 0, 1, d[0], d[1]]);
+    else for (const k of capasSel()) { k.t.x += d[0]; k.t.y += d[1]; }
     commit();
   }
 });
@@ -1669,6 +1796,7 @@ addEventListener('keyup', (e) => {
 
 function herr(h) {
   herramienta = h; cuchilla = null; pluma = null; marcaIman = null; if (h !== 'mover') nodos = false; todo();
+  if (h === 'lapiz') estado('Lápiz: dibuja a mano alzada; al soltar pasa a curvas (acabando cerca del principio, forma cerrada) · Esc para salir');
   if (h === 'pluma') estado('Pluma: clic = esquina · clic y arrastrar = curva · clic en el primer nodo o Enter cierra · Esc cancela');
   if (h === 'cuchilla') {
     estado('Cuchilla: clic en una línea azul, o arrastra una recta de lado a lado (imán a bordes y esquinas · Mayús: 15° · ⌘: sin imán) · Esc para salir');
@@ -1706,12 +1834,12 @@ function cruce(r, s) {
   const q = [r.o[0] + r.u[0] * k, r.o[1] + r.u[1] * k];
   return enAlcance(q, r) && enAlcance(q, s) ? q : null;
 }
-function iman(m, desde, e, fuente = bordes) {
+function iman(m, desde, e, fuente = bordes, paso = Math.PI / 12) {
   if (e.metaKey) return { p: m, marca: null };
   const tolP = 8 / vista.zoom, tolL = 6 / vista.zoom, lejos = (q, p) => Math.hypot(q[0] - p[0], q[1] - p[1]);
   let p = m, rayo = null;
   if (e.shiftKey && desde) {
-    const a = Math.round(Math.atan2(m[1] - desde[1], m[0] - desde[0]) / (Math.PI / 12)) * (Math.PI / 12);
+    const a = Math.round(Math.atan2(m[1] - desde[1], m[0] - desde[0]) / paso) * paso;
     rayo = { o: desde, u: [Math.cos(a), Math.sin(a)].map((v) => (Math.abs(v) < 1e-12 ? 0 : v)), k0: -Infinity, k1: Infinity };  // cos(90°) = 6e-17, no 0
     p = proyectar(m, rayo);
   }
@@ -1749,7 +1877,23 @@ async function pedirSugerencias() {
 // de su caja; la transformación de la original queda horneada en los nodos.
 let cuchilla = null;  // { puntos: [[x, y]...], cursor } en el mundo
 
+// ---------- lápiz (G7): la polilínea a mano alzada; al soltar el servidor la ajusta a
+// rectas, arcos y cúbicas (tol 0,002, /api/lapiz). Acabada cerca del principio (8 px), una
+// forma cerrada; si no, un camino abierto con el trazo por defecto.
+async function terminarLapiz(pts) {
+  if (pts.length < 3) return todo();
+  const [x0, y0] = aPantalla(pts[0]), [x1, y1] = aPantalla(pts.at(-1)), cerrado = pts.length > 4 && Math.hypot(x1 - x0, y1 - y0) < 8;
+  const r = await api('/api/lapiz', { puntos: cerrado ? pts.slice(0, -1) : pts, cerrado });
+  if (r.error) { todo(); return estado(r.error, true); }
+  const k = doc.capas.filter((c) => c.nombre.startsWith('Lápiz')).length + 1;
+  const c = { id: idSig++, nombre: `Lápiz ${k}`, op: 'unir', visible: true, ...(cerrado ? {} : { abierto: true, trazo: { ...TRAZO } }) };
+  ponerMundo(c, [r.nodos]);
+  doc.capas.push(c); selec = [c.id]; nodos = false;
+  commit(); estado(`Lápiz: ${pts.length} puntos → ${r.nodos.length} nodos`);
+}
 // ---------- pluma
+// el imán de la pluma: los bordes rectos y, además, los nodos de las capas visibles (G7)
+const fuentePluma = () => [...bordes, ...doc.capas.filter((c) => c.visible).flatMap((c) => nodosMundo(c).flat().map((n) => [n.p, n.p, c.id]))];
 // Los nodos van en el mundo mientras se dibuja; al cerrar, una capa nueva con el origen en
 // el centro de su caja. Imán y Mayús (15°) como en la cuchilla.
 // Enter o Esc con 2 nodos o más dejan un camino abierto con trazo (G2); clic en el primer
@@ -2374,7 +2518,7 @@ $('#archivoSvg').addEventListener('change', async (e) => {
 });
 
 // para las pruebas de tests/: estado de solo lectura
-window.editor = { triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado, seleccion: () => selec, aplanar, redondear, svgDiseno, medidas: () => medida, evaluar };
+window.editor = { triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado, seleccion: () => selec, aplanar, redondear, svgDiseno, elegirNodos: (n) => { nodosMulti = capaSel().anillos[0].slice(0, n).map((_, i) => ({ k: 0, i })); nodoSel = nodosMulti[0]; sobre(); }, medidas: () => medida, evaluar };
 
 const lista = await api('/api/simbolos');
 ajustesBase = lista.ajustes;

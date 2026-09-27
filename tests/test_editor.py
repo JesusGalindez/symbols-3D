@@ -841,3 +841,16 @@ def test_redondear_es_la_misma_en_el_navegador():
     py = [editor.curvas.redondear(a) for a in anillos]
     plano = lambda x: [v for a in x for n in a for k in ("p", "ent", "sal") if n[k] for v in n[k]]  # noqa: E731
     assert len(plano(r)) == len(plano(py)) and max(abs(a - b) for a, b in zip(plano(r), plano(py))) < 1e-12
+
+
+# ---------- G7: lápiz
+def test_lapiz_de_300_puntos_llega_con_pocos_nodos():
+    """Criterio de G7: un trazo de lápiz de 300 puntos (con temblor) llega con ≤ 30 nodos y
+    a menos de 0,002 del dibujo, abierto y empezando y acabando en sus extremos."""
+    import random
+    random.seed(7)
+    pts = [(t * 0.6 - 0.3, 0.15 * math.sin(t * 7) + 0.0005 * random.uniform(-1, 1)) for t in (k / 299 for k in range(300))]
+    nodos = editor.curvas.ajustar_anillo(pts, 0.002, cerrado=False)[0]
+    linea = LineString(editor.curvas.aplanar(nodos, cerrado=False))
+    assert len(nodos) <= 30 and max(linea.distance(Point(p)) for p in pts) < 0.002
+    assert nodos[0]["p"] == list(pts[0]) and math.dist(nodos[-1]["p"], pts[-1]) < 1e-12

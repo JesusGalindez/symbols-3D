@@ -922,6 +922,68 @@ try {
     await s.close();
   }
 
+  // G7: varios nodos (marco y lazo), moverlos juntos, ⇧⌘M, ⌘J y el lápiz
+  {
+    mkdirSync(join(e.salida, 'editor'), { recursive: true });
+    const poli = (id, nombre, n, [cx, cy], r, extra = {}) => ({ id, nombre, op: 'unir', visible: true, t: { x: cx, y: cy, r: 0, sx: 1, sy: 1 },
+      anillos: [Array.from({ length: n }, (_, i) => ({ p: [r * Math.cos(i * 2 * Math.PI / n), r * Math.sin(i * 2 * Math.PI / n)], ent: null, sal: null, tipo: 'vivo' }))], ...extra });
+    writeFileSync(join(e.salida, 'editor', 'nodos.json'), JSON.stringify({ version: 3, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      capas: [poli(1, 'Dodecágono', 24, [0, 0.1], 0.3)] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'nodos');
+    const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+    const capa = () => s.evaluate(() => window.editor.doc().capas[0]);
+    await s.click('#capas li[data-id="1"] .nom'); await s.keyboard.press('Enter');
+    // marco sobre la mitad derecha: 12 nodos (x > 0 en local; el de x = 0 no)
+    const [m0x, m0y] = await cli(0.01, 0.5), [m1x, m1y] = await cli(0.5, -0.3);
+    await s.mouse.move(m0x, m0y); await s.mouse.down(); await s.mouse.move(m1x, m1y, { steps: 6 }); await s.mouse.up();
+    const n = await s.$$eval('#sobre .nodo.sel', (l) => l.length);
+    comprobar(n === 11, `el marco elige los nodos de dentro (${n})`);
+    const antes = (await capa()).anillos[0];
+    const uno = await s.$eval('#sobre .nodo.sel', (x) => { const r = x.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    await s.mouse.move(...uno); await s.mouse.down(); await s.mouse.move(uno[0] + 30, uno[1] - 10, { steps: 5 }); await s.mouse.up();
+    const despues = (await capa()).anillos[0];
+    const deltas = antes.map((q, i) => [despues[i].p[0] - q.p[0], despues[i].p[1] - q.p[1]]).filter(([dx, dy]) => dx || dy);
+    const iguales = deltas.every(([dx, dy]) => Math.abs(dx - deltas[0][0]) < 1e-15 && Math.abs(dy - deltas[0][1]) < 1e-15);
+    comprobar(deltas.length === 11 && iguales, `arrastrar uno mueve los 11 elegidos lo mismo (${deltas.length} movidos)`);
+    // lazo (Q) alrededor de dos nodos vecinos, juntarlos y fusionarlos (⇧⌘M)
+    await s.keyboard.press('q');
+    const w = (i) => s.evaluate((i) => { const c = window.editor.doc().capas[0], n = c.anillos[0][i].p; return [c.t.x + n[0], c.t.y + n[1]]; }, i);
+    const [p13, p14] = [await w(13), await w(14)];
+    const cx = (p13[0] + p14[0]) / 2, cy = (p13[1] + p14[1]) / 2, R = 0.06;
+    const lazo = []; for (let a = 0; a <= 2 * Math.PI + 0.01; a += Math.PI / 8) lazo.push(await cli(cx + R * Math.cos(a), cy + R * Math.sin(a)));
+    await s.mouse.move(...lazo[0]); await s.mouse.down(); for (const q of lazo.slice(1)) await s.mouse.move(...q); await s.mouse.up();
+    comprobar(await s.$$eval('#sobre .nodo.sel', (l) => l.length) === 2, 'el lazo elige los dos nodos de dentro');
+    // a la vez a 0,0005 uno del otro: se escalan hacia su centro y se funden
+    const esq = await s.$eval('#sobre .asa[data-asa-n="0"]', (x) => { const r = x.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    const opu = await s.$eval('#sobre .asa[data-asa-n="2"]', (x) => { const r = x.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    await s.mouse.move(...esq); await s.mouse.down(); await s.mouse.move(opu[0] - 0.2, opu[1] + 0.2, { steps: 8 }); await s.mouse.up();
+    await s.keyboard.down('Meta'); await s.keyboard.down('Shift'); await s.keyboard.press('m'); await s.keyboard.up('Shift'); await s.keyboard.up('Meta');
+    comprobar((await capa()).anillos[0].length === 23, `⇧⌘M funde los dos nodos juntos en uno (${(await capa()).anillos[0].length} nodos)`);
+    await s.keyboard.press('Escape'); await s.keyboard.press('Escape');
+    // ⌘J: dos caminos abiertos que se tocan se unen en uno
+    await s.keyboard.press('p');
+    for (const [x, y] of [[-0.4, -0.4], [-0.1, -0.4]]) await s.mouse.click(...await cli(x, y));
+    await s.keyboard.press('Enter');
+    const id1 = (await s.evaluate(() => window.editor.seleccion()))[0];
+    await s.keyboard.press('p');
+    for (const [x, y] of [[0.2, -0.35], [0.4, -0.4]]) await s.mouse.click(...await cli(x, y));
+    await s.keyboard.press('Enter');
+    await s.keyboard.down('Shift'); await s.click(`#capas li[data-id="${id1}"] .nom`); await s.keyboard.up('Shift');
+    await s.keyboard.down('Meta'); await s.keyboard.press('j'); await s.keyboard.up('Meta');
+    const unidos = await s.evaluate(() => window.editor.doc().capas.filter((c) => c.abierto));
+    comprobar(unidos.length === 1 && unidos[0].anillos[0].length === 4, `⌘J une los dos caminos abiertos en uno de 4 nodos`);
+    await s.keyboard.down('Meta'); await s.keyboard.press('j'); await s.keyboard.up('Meta');
+    comprobar(!(await s.evaluate(() => window.editor.doc().capas.some((c) => c.abierto))), 'y otro ⌘J lo cierra');
+    // lápiz: una onda de 120 puntos pasa a pocos nodos, abierta y con trazo
+    await s.keyboard.press('Escape'); await s.keyboard.down('Shift'); await s.keyboard.press('p'); await s.keyboard.up('Shift');
+    const onda = []; for (let i = 0; i <= 120; i++) onda.push(await cli(-0.4 + 0.8 * i / 120, 0.55 + 0.05 * Math.sin(i / 120 * 6)));
+    await s.mouse.move(...onda[0]); await s.mouse.down(); for (const q of onda.slice(1)) await s.mouse.move(...q); await s.mouse.up();
+    await s.waitForFunction(() => window.editor.doc().capas.at(-1).nombre.startsWith('Lápiz'), { timeout: 10000 });
+    const lap = await s.evaluate(() => window.editor.doc().capas.at(-1));
+    comprobar(lap.abierto && lap.trazo && lap.anillos[0].length <= 12, `el lápiz pasa 120 puntos a ${lap.anillos[0].length} nodos, camino abierto con trazo`);
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {
@@ -987,7 +1049,9 @@ try {
   await g.keyboard.press('ArrowRight', { delay: 10 });
   const xAntes = await g.evaluate(() => window.editor.doc().capas.at(-1).t.x);
   await g.close({ runBeforeUnload: true });
-  await pausa(800);
+  // lo manda sendBeacon al cerrar: se espera a que esté en disco (con la máquina cargada,
+  // 800 ms fijos no siempre bastaban)
+  for (let i = 0; i < 100 && JSON.parse(readFileSync(join(e.salida, 'editor', 'grande.json'))).capas.at(-1).t.x === 0; i++) await pausa(100);
   const { p: q } = await abrirEditor(e.chrome, e.url, 'grande');
   const xDespues = await q.evaluate(() => window.editor.doc().capas.at(-1).t.x);
   comprobar(xAntes !== 0 && Math.abs(xAntes - xDespues) < 1e-12, `cerrar la pestaña sin guardar y reabrir conserva el último cambio (${xAntes} → ${xDespues})`);

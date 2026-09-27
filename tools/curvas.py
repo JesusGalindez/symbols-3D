@@ -163,12 +163,16 @@ def _mas_afilado(r):
     return int(np.argmax(np.convolve(np.r_[giro, giro[:paso]], np.ones(paso), "valid")[:len(r)] + 0)) + paso // 2
 
 
-def ajustar_anillo(anillo, tol=0.0005):
-    """Polilínea cerrada -> (nodos, tipos de tramo)."""
+def ajustar_anillo(anillo, tol=0.0005, cerrado=True):
+    """Polilínea cerrada -> (nodos, tipos de tramo). cerrado=False: un camino abierto (el
+    lápiz, G7), que empieza y acaba en sus extremos."""
     r = np.asarray(anillo, float)
-    i0 = _mas_afilado(r) % len(r)
-    r = np.roll(r, -i0, 0)
-    pts = np.vstack([r, r[:1]])  # cerrado: el último punto es el primero
+    if cerrado:
+        i0 = _mas_afilado(r) % len(r)
+        r = np.roll(r, -i0, 0)
+        pts = np.vstack([r, r[:1]])  # cerrado: el último punto es el primero
+    else:
+        pts = r
     n = len(pts)
     tramos = []  # (i, j, tipo, cubicas)
     i = 0
@@ -216,7 +220,10 @@ def ajustar_anillo(anillo, tol=0.0005):
             fundidos[-1] = {"p": fundidos[-1]["p"], "ent": fundidos[-1]["ent"], "sal": nd["sal"]}
         else:
             fundidos.append(nd)
-    if len(fundidos) > 1 and fundidos[-1].get("_fin"):  # el último cierra en el primero
+    if not cerrado:
+        if not fundidos[-1].get("_fin"):  # acaba en una recta: falta su punto final
+            fundidos.append({"p": pts[-1].tolist(), "ent": None, "sal": None})
+    elif len(fundidos) > 1 and fundidos[-1].get("_fin"):  # el último cierra en el primero
         fundidos[0]["ent"] = fundidos[-1]["ent"]
         fundidos.pop()
     for nd in fundidos:
