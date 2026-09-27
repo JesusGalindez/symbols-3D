@@ -246,10 +246,11 @@ TOL_CONTORNO = 0.00005  # al volver a curvas una forma calculada: en un trazo de
 # 0,0002 (la de importar símbolos) el IoU caía a 0,996; con esta, 0,9993 y 19 nodos
 
 
-def a_curvas(geo):
+def a_curvas(geo, tol=TOL_CONTORNO):
     """Una forma de shapely -> anillos de nodos (rectas, arcos y cúbicas), como al abrir un
-    símbolo: exteriores y huecos juntos, que el relleno evenodd combina bien."""
-    return [[{**n, "tipo": tipo_nodo(n)} for n in curvas.ajustar_anillo(list(a.coords)[:-1], TOL_CONTORNO)[0]]
+    símbolo: exteriores y huecos juntos, que el relleno evenodd combina bien. tol: la fina
+    para trazos (contornear, engrosar); aplanar y las booleanas usan la de los símbolos."""
+    return [[{**n, "tipo": tipo_nodo(n)} for n in curvas.ajustar_anillo(list(a.coords)[:-1], tol)[0]]
             for p in s.lista(geo) for a in [p.exterior, *p.interiors] if len(a.coords) >= 4]
 
 
@@ -313,13 +314,65 @@ def forma_capa(anillos):
     return forma
 
 
+def combinar(geo, forma, op):
+    """Una capa sobre lo de debajo: unir suma, restar quita, intersecar se queda con lo de
+    debajo que cae dentro, excluir con lo que está en una sola de las dos (G4)."""
+    if op == "unir":
+        return geo.union(forma)
+    if op == "restar":
+        return geo.difference(forma)
+    if op == "intersecar":
+        return geo.intersection(forma)
+    if op == "excluir":
+        return geo.symmetric_difference(forma)
+    raise ValueError(f"operación desconocida: {op}")
+
+
+def aplanar(capas):
+    """⌘E: las capas (contiguas, de abajo arriba) combinadas entre ellas desde vacío, como
+    una sola forma con curvas. Lo que sus restas o intersecciones hacían a las capas de
+    debajo de la selección deja de hacerse (como en Figma); el navegador lo avisa."""
+    geo = Polygon()
+    for c in capas:
+        geo = combinar(geo, shapely.set_precision(forma_de(c), PRECISION), c["op"])
+    geo = unary_union([p for p in s.lista(geo.buffer(0)) if p.area > 1e-7])
+    if geo.is_empty:
+        raise ValueError("no queda ninguna forma al aplanar")
+    return a_curvas(geo, TOL_CURVAS)
+
+
+def booleana(capas, op):
+    """Los botones booleanos de Figma sobre varias capas (de abajo arriba), sin mirar la
+    operación de cada una: unir = todas; restar = la de abajo menos las demás; intersecar =
+    lo común a todas; excluir = lo que cubre un número impar. Una forma con curvas."""
+    formas = [shapely.set_precision(forma_de(c), PRECISION) for c in capas]
+    if op == "unir":
+        geo = unary_union(formas)
+    elif op == "restar":
+        geo = formas[0].difference(unary_union(formas[1:]))
+    elif op == "intersecar":
+        geo = formas[0]
+        for f in formas[1:]:
+            geo = geo.intersection(f)
+    elif op == "excluir":
+        geo = Polygon()
+        for f in formas:
+            geo = geo.symmetric_difference(f)
+    else:
+        raise ValueError(f"operación desconocida: {op}")
+    geo = unary_union([p for p in s.lista(geo.buffer(0)) if p.area > 1e-7])
+    if geo.is_empty:
+        raise ValueError("la operación no deja ninguna forma")
+    return a_curvas(geo, TOL_CURVAS)
+
+
 def planta(capas, simetria=None):
-    """Capas en coordenadas del mundo, de abajo arriba: unir suma, restar quita lo de debajo.
+    """Capas en coordenadas del mundo, de abajo arriba, cada una con su operación (combinar).
     Sin el redondeo del acabado (con él, geometria())."""
     geo = Polygon()
     for c in capas:
         forma = shapely.set_precision(forma_de(c), PRECISION)
-        geo = geo.union(forma) if c["op"] == "unir" else geo.difference(forma)
+        geo = combinar(geo, forma, c["op"])
     geo = simetrizar(geo, simetria)
     return unary_union([p for p in s.lista(geo.buffer(0)) if p.area > 1e-7])
 
@@ -787,8 +840,12 @@ class Manejador(SimpleHTTPRequestHandler):
                 return self.responder(cortar(datos["capas"], datos["linea"]))
             except Exception as e:
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
-        if self.path in ("/api/contornear", "/api/desplazar", "/api/engrosar"):
+        if self.path in ("/api/contornear", "/api/desplazar", "/api/engrosar", "/api/aplanar", "/api/booleana"):
             try:
+                if self.path == "/api/aplanar":
+                    return self.responder({"anillos": aplanar(datos["capas"])})
+                if self.path == "/api/booleana":
+                    return self.responder({"anillos": booleana(datos["capas"], datos["op"])})
                 if self.path == "/api/contornear":
                     return self.responder({"capas": contornear(datos["capas"])})
                 if self.path == "/api/desplazar":

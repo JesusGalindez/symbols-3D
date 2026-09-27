@@ -762,6 +762,45 @@ try {
     await s.close();
   }
 
+  // G4: intersecar y excluir (panel, vista provisional y exacta), aplanar (⌘E) y los
+  // botones booleanos (⌥⇧U)
+  {
+    const cuadro = (id, nombre, [x, y, w, h]) => ({ id, nombre, op: 'unir', visible: true, t: { x, y, r: 0, sx: 1, sy: 1 },
+      anillos: [[[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map((p) => ({ p, ent: null, sal: null, tipo: 'vivo' }))] });
+    mkdirSync(join(e.salida, 'editor'), { recursive: true });
+    writeFileSync(join(e.salida, 'editor', 'bool.json'), JSON.stringify({ version: 2, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      capas: [cuadro(1, 'A', [-0.1, 0, 0.4, 0.4]), cuadro(2, 'B', [0.1, 0, 0.4, 0.4]), cuadro(3, 'C', [0, -0.35, 0.2, 0.1])] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'bool');
+    const area = () => s.evaluate(() => window.editor.resultado().reduce((t, poli) => t + poli.reduce((u, a, k) => {
+      let d = 0; for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; }
+      return u + (k ? -1 : 1) * Math.abs(d / 2); }, 0), 0));
+    const esperaExacta = () => s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    await s.click('#capas li[data-id="2"] .nom');
+    await s.select('[data-p=op]', 'intersecar');
+    comprobar(await s.$$eval('#lienzo .recorte', (l) => l.length) === 1, 'intersecar recorta lo de debajo en la vista provisional');
+    await esperaExacta();
+    const aI = await area();
+    comprobar(Math.abs(aI - (0.2 * 0.4 + 0.2 * 0.1)) < 0.004, `intersecar: queda lo común de A y B, más C encima (área ${aI.toFixed(4)})`);
+    await s.select('[data-p=op]', 'excluir');
+    comprobar(/sin «excluir»/.test(await s.$eval('#etiqueta2d', (x) => x.textContent)), 'excluir se rotula en la provisional');
+    await esperaExacta();
+    const aE = await area();
+    comprobar(Math.abs(aE - (0.4 * 0.4 + 0.02)) < 0.004, `excluir: A y B sin lo común, más C (área ${aE.toFixed(4)})`);
+    // ⌘E con A y B (seguidas): una capa con la misma forma
+    await s.keyboard.down('Shift'); await s.click('#capas li[data-id="1"] .nom'); await s.keyboard.up('Shift');
+    await s.keyboard.down('Meta'); await s.keyboard.press('e'); await s.keyboard.up('Meta');
+    await s.waitForFunction(() => window.editor.doc().capas.length === 2, { timeout: 10000 });
+    await esperaExacta();
+    comprobar(Math.abs(await area() - aE) < 1e-4, `⌘E aplana A y B en una capa con la misma forma (${(await area()).toFixed(4)})`);
+    // ⌥⇧U: unir las dos que quedan
+    await s.keyboard.down('Meta'); await s.keyboard.press('a'); await s.keyboard.up('Meta');
+    await s.keyboard.down('Alt'); await s.keyboard.down('Shift'); await s.keyboard.press('KeyU'); await s.keyboard.up('Shift'); await s.keyboard.up('Alt');
+    await s.waitForFunction(() => window.editor.doc().capas.length === 1, { timeout: 10000 });
+    await esperaExacta();
+    comprobar(Math.abs(await area() - aE) < 1e-4 && (await s.evaluate(() => window.editor.doc().capas[0].nombre)) === 'Unión', '⌥⇧U une las elegidas en una capa «Unión»');
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {

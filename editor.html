@@ -79,6 +79,12 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #lienzo.provisional .capa.trazo.unir,#flotante .capa.trazo.unir,.flotante-espejo .capa.trazo.unir{stroke:var(--laca)}
 #lienzo.provisional .capa.trazo.restar,#flotante .capa.trazo.restar,.flotante-espejo .capa.trazo.restar{stroke:var(--fondo)}
 #lienzo .capa.trazo:hover{stroke:rgba(13,153,255,.35)}
+/* intersecar y excluir (G4): en la vista provisional, intersecar recorta lo de debajo con un
+   clipPath; excluir no se puede pintar por capas y se ve solo su contorno hasta la exacta.
+   Fuera de la provisional no se recorta: si no, lo de debajo no se podría elegir */
+#lienzo .capa.intersecar,#lienzo .capa.excluir{stroke:rgba(255,255,255,.55);stroke-dasharray:2 3}
+#lienzo.provisional .capa.intersecar,#lienzo.provisional .capa.excluir,#flotante .capa.intersecar,#flotante .capa.excluir{fill:none;stroke:var(--acento);stroke-width:1}
+#lienzo:not(.provisional) .recorte{clip-path:none}
 #lienzo .esqueleto{fill:none;stroke:rgba(255,255,255,.4);stroke-width:1;stroke-dasharray:4 3;pointer-events:none}
 #dos .contorno{fill:none;stroke:var(--acento);stroke-width:1.5;pointer-events:none}
 #sobre .caja{fill:none;stroke:var(--acento);stroke-width:1;pointer-events:none}
@@ -169,7 +175,8 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 <div id="ayuda" hidden><div class="caja-ayuda">
   <h4>Herramientas</h4><dl><dt>V</dt><dd>Mover</dd><dt>R · O</dt><dd>Rectángulo · elipse (⇧: proporción)</dd>
     <dt>P</dt><dd>Pluma: clic esquina, clic y arrastrar curva; clic en el primero cierra; Enter o Esc deja un camino abierto con trazo; clic en un extremo de un camino lo alarga</dd>
-    <dt>⇧⌘O</dt><dd>Contornear trazo (pasa a forma rellena)</dd>
+    <dt>⇧⌘O</dt><dd>Contornear trazo (pasa a forma rellena)</dd><dt>⌘E</dt><dd>Aplanar las elegidas (seguidas) en una forma</dd>
+    <dt>⌥⇧U · S · I · E</dt><dd>Unir · restar · intersecar · excluir las elegidas</dd>
     <dt>K</dt><dd>Cuchilla: clic en una línea azul o arrastrar una recta</dd><dt>Enter · doble clic</dt><dd>Nodos de la capa elegida</dd></dl>
   <h4>Selección</h4><dl><dt>Clic</dt><dd>Una capa</dd><dt>⇧ + clic</dt><dd>Sumar o quitar (también en la lista)</dd>
     <dt>Arrastrar en vacío</dt><dd>Recuadro: lo que toca</dd><dt>⌘A</dt><dd>Todas</dd><dt>Esc</dt><dd>Salir de nodos, soltar la selección</dd></dl>
@@ -372,16 +379,20 @@ function espejoProvisional(capas) {
 }
 
 function dibujar() {
-  let capas = '', esqueletos = '';
+  let capas = '', esqueletos = '', recortes = '';
   let costuras = '';
   for (const c of doc.capas) if (c.visible) {
+    if (c.op === 'intersecar' && !c.trazo) {  // lo de debajo, recortado por esta capa (provisional)
+      recortes += `<clipPath id="recorte-${c.id}" clipPathUnits="userSpaceOnUse"><path clip-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/></clipPath>`;
+      capas = `<g class="recorte" clip-path="url(#recorte-${c.id})">${capas}</g>`;
+    }
     capas += pathCapa(c, `data-id="${c.id}"`);
     if (c.trazo) esqueletos += `<path class="esqueleto" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>`;
     if (c.costuras?.length) costuras += `<path class="costura" data-costura="${c.id}" transform="${marcoCapa(c.t)}" d="${c.costuras.map((l) => 'M' + l.map((q) => q.join(' ')).join('L')).join('')}"/>`;
   }
   lienzo.innerHTML = `<g id="mundo" transform="${marcoMundo()}">
       <circle class="guia" r="0.5"/><line class="guia" x1="-1000" x2="1000"/><line class="guia" y1="-1000" y2="1000"/>
-      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/><g id="capasLienzo">${capas}</g>${espejoProvisional(capas)}${esqueletos}${costuras}</g>`;
+      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/><defs>${recortes}</defs><g id="capasLienzo">${capas}</g>${espejoProvisional(capas)}${esqueletos}${costuras}</g>`;
   lienzo.setAttribute('class', `herr-${herramienta}${espacio ? ' pan' : ''}${exacta ? '' : ' provisional'}`);
   sobre();
 }
@@ -687,7 +698,7 @@ function evaluar(texto, actual) {
 function cambioGeo() {
   peticion++;  // invalida la respuesta que esté en camino
   if (exacta) { exacta = false; lienzo.classList.add('provisional'); $('.exacto').setAttribute('d', ''); }
-  $('#etiqueta2d').textContent = 'Vista provisional · calculando la exacta…';
+  $('#etiqueta2d').textContent = `Vista provisional${doc.capas.some((c) => c.visible && (c.op === 'excluir' || c.op === 'intersecar' && c.trazo)) ? ' (sin «excluir»)' : ''} · calculando la exacta…`;
   provisional3D();
   clearTimeout(espera);
   espera = setTimeout(pedirExacta, 400);
@@ -712,11 +723,12 @@ async function pedirExacta() {
 
 // ---------- paneles
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const OPS = { unir: ['＋', 'Une'], restar: ['−', 'Resta lo de debajo'], intersecar: ['∩', 'Se queda con lo de debajo que cae dentro'], excluir: ['⊕', 'Excluye: lo que está en una sola'] };
 function capasUI() {
   $('#capas').innerHTML = [...doc.capas].reverse().map((c) => `
     <li data-id="${c.id}" class="${selec.includes(c.id) ? 'sel' : ''} ${c.visible ? '' : 'oculta'} ${c.bloqueada ? 'bloqueada' : ''}">
       <button class="ojo" data-accion="ojo" title="Mostrar u ocultar">${c.visible ? '◉' : '○'}</button>
-      <span class="op" title="${c.op === 'unir' ? 'Une' : 'Resta'}">${c.op === 'unir' ? '＋' : '−'}</span>
+      <span class="op" title="${OPS[c.op][1]}">${OPS[c.op][0]}</span>
       <span class="nom">${esc(c.nombre)}</span>
       <button class="candado" data-accion="candado" title="Bloquear (⇧⌘L)">${c.bloqueada ? '🔒' : '🔓'}</button></li>`).join('');
 }
@@ -738,7 +750,9 @@ function panel() {
       <label class="ancho">Nombre<input data-p="nombre" value="${esc(c.nombre)}"></label>
       <label class="ancho">Operación<select data-p="op">
         <option value="unir" ${c.op === 'unir' ? 'selected' : ''}>Unir</option>
-        <option value="restar" ${c.op === 'restar' ? 'selected' : ''}>Restar lo de debajo</option></select></label>
+        <option value="restar" ${c.op === 'restar' ? 'selected' : ''}>Restar lo de debajo</option>
+        <option value="intersecar" ${c.op === 'intersecar' ? 'selected' : ''}>Intersecar con lo de debajo</option>
+        <option value="excluir" ${c.op === 'excluir' ? 'selected' : ''}>Excluir (lo que no se solapa)</option></select></label>
       <label>X<input type="text" inputmode="decimal" step="0.005" data-p="x" value="${num(c.t.x)}"></label>
       <label>Y<input type="text" inputmode="decimal" step="0.005" data-p="y" value="${num(c.t.y)}"></label>
       <label>Ancho<input type="text" inputmode="decimal" step="0.005" min="0.001" data-p="w" value="${num((b[2] - b[0]) * Math.abs(c.t.sx))}"></label>
@@ -760,6 +774,9 @@ function panel() {
       <label>Alto<input type="text" inputmode="decimal" step="0.005" min="0.001" data-q="h" value="${ok ? num(B[3] - B[1]) : ''}"></label></div>
       <div class="fila">${bot('izq', '⇤', 'Alinear a la izquierda')}${bot('centro', '↔', 'Centrar en horizontal')}${bot('der', '⇥', 'Alinear a la derecha')}
         ${bot('arriba', '⤒', 'Alinear arriba')}${bot('medio', '↕', 'Centrar en vertical')}${bot('abajo', '⤓', 'Alinear abajo')}</div>
+      <div class="fila"><button data-booleana="unir" title="Unir (⌥⇧U)">＋ Unir</button><button data-booleana="restar" title="Restar (⌥⇧S): la de abajo menos las demás">− Restar</button>
+        <button data-booleana="intersecar" title="Intersecar (⌥⇧I)">∩</button><button data-booleana="excluir" title="Excluir (⌥⇧E)">⊕</button>
+        <button data-aplanar="1" title="Aplanar (⌘E): una sola forma con curvas">Aplanar</button></div>
       <div class="fila"><button data-distribuir="0" ${n < 3 ? 'disabled' : ''} title="Mismo hueco en horizontal (3 o más)">Distribuir ↔</button>
         <button data-distribuir="1" ${n < 3 ? 'disabled' : ''} title="Mismo hueco en vertical (3 o más)">Distribuir ↕</button></div>
       <p class="nota">⇧ + clic suma o quita una capa · arrastrar en vacío selecciona lo que toca el recuadro · ⌘A todo.</p>` + panelTrazo(capasSel());
@@ -829,6 +846,8 @@ $('#props').addEventListener('click', (e) => {
   if (e.target.dataset.alinear) alinear(e.target.dataset.alinear);
   if (e.target.dataset.distribuir) distribuir(Number(e.target.dataset.distribuir));
   if (e.target.id === 'bCosturas') { delete capaSel().costuras; commit(); }
+  if (e.target.dataset.booleana) booleanaSel(e.target.dataset.booleana);
+  if (e.target.dataset.aplanar) aplanarSel();
   const a = e.target.dataset.trAccion, cs = capasSel();
   if (a === 'contornear') contornear(cs);
   if (a === 'convertir') { for (const c of cs) c.trazo = { ...TRAZO }; commit(); }
@@ -1413,8 +1432,12 @@ addEventListener('keydown', (e) => {
   if (mod && e.shiftKey && k === 'h') { e.preventDefault(); const cs = capasSel(), ver = !cs.every((x) => x.visible); for (const x of cs) x.visible = ver; commit(); return; }
   if (mod && k === 'r') { e.preventDefault(); renombrar(); return; }
   if (mod && e.shiftKey && k === 'o') { e.preventDefault(); contornear(capasSel()); return; }
+  if (mod && k === 'e') { e.preventDefault(); aplanarSel(); return; }
   if (mod && (e.key === '+' || e.key === '=' || e.key === '-')) { e.preventDefault(); zoomPaso(e.key === '-' ? 0.5 : 2); return; }
   if (mod) return;
+  if (e.altKey && e.shiftKey && ['KeyU', 'KeyS', 'KeyI', 'KeyE'].includes(e.code)) {
+    e.preventDefault(); booleanaSel({ KeyU: 'unir', KeyS: 'restar', KeyI: 'intersecar', KeyE: 'excluir' }[e.code]); return;
+  }
   if (!$('#ayuda').hidden) { if (e.key === 'Escape' || e.key === '?') ayuda(false); return; }
   if (e.key === '?') { ayuda(true); return; }
   if (e.shiftKey && e.code === 'Digit1') { ajustarVista(false); return; }
@@ -1727,6 +1750,40 @@ async function engrosar() {
   estado(r.d ? `Engrosadas ${r.capas.length} capa(s) ${num(r.d, 4)} por lado: vuelve a generar` : 'No hacía falta engrosar nada');
 }
 
+// ---------- booleanas y aplanar (G4)
+// Aplanar (⌘E): las elegidas, contiguas, pasan a una sola capa «unir» con la geometría
+// exacta reajustada a curvas. Los botones booleanos (⌥⇧U, S, I, E) combinan las elegidas
+// entre ellas con esa operación y las aplanan (destructivo, se puede deshacer); en G5 pasan
+// a crear un grupo booleano no destructivo.
+function reemplazar(cs, anillos, nombre) {
+  const idx = cs.map((c) => doc.capas.indexOf(c)), arriba = Math.max(...idx);
+  const nueva = { id: idSig++, nombre, op: 'unir', visible: true };
+  ponerMundo(nueva, anillos);
+  const resto = doc.capas.filter((c) => !cs.includes(c));
+  resto.splice(arriba - (idx.length - 1), 0, nueva);
+  doc.capas = resto; selec = [nueva.id]; nodos = false; nodoSel = null;
+}
+async function aplanarSel() {
+  const cs = capasSel().filter((c) => c.visible);
+  if (cs.length < 1) return;
+  const idx = cs.map((c) => doc.capas.indexOf(c)).sort((a, b) => a - b);
+  if (idx.some((v, i) => i && v !== idx[i - 1] + 1)) return estado('Aplanar: las capas tienen que estar seguidas en la lista (lo de en medio cambiaría)', true);
+  const r = await api('/api/aplanar', { capas: cs.map(capaMundo) });
+  if (r.error) return estado(r.error, true);
+  const debajo = doc.capas.slice(0, idx[0]).some((c) => c.visible) && cs.some((c) => c.op !== 'unir');
+  reemplazar(cs, r.anillos, cs.length === 1 ? cs[0].nombre : 'Aplanado');
+  commit();
+  estado(`Aplanadas ${cs.length} capa(s) en una` + (debajo ? ' · sus restas o intersecciones ya no afectan a lo de debajo' : ''));
+}
+async function booleanaSel(op) {
+  const cs = capasSel().filter((c) => c.visible);
+  if (cs.length < 2) return estado('Las operaciones booleanas necesitan dos capas o más', true);
+  const r = await api('/api/booleana', { capas: cs.map(capaMundo), op });
+  if (r.error) return estado(r.error, true);
+  reemplazar(cs, r.anillos, { unir: 'Unión', restar: 'Resta', intersecar: 'Intersección', excluir: 'Exclusión' }[op]);
+  commit();
+}
+
 // ---------- portapapeles
 // Copiar pone en el portapapeles un SVG de las capas (texto plano: lo lee Figma, Illustrator
 // o cualquier programa) con el JSON exacto de las capas dentro de <metadata>: al pegar en el
@@ -1903,9 +1960,9 @@ function provisional3D() {
     m.userData = { id: c.id, cache: true };
     colocar(m, c); grupo.add(m);
   }
-  const restas = doc.capas.some((c) => c.visible && c.op === 'restar');
+  const restas = doc.capas.some((c) => c.visible && c.op !== 'unir');
   const trazos = doc.capas.some((c) => c.visible && c.trazo);
-  const falta = [...(restas ? ['las restas'] : []), ...(trazos ? ['los trazos'] : []), ...(doc.simetria ? ['la simetría'] : [])].join(' ni ');
+  const falta = [...(restas ? ['las restas ni intersecciones'] : []), ...(trazos ? ['los trazos'] : []), ...(doc.simetria ? ['la simetría'] : [])].join(' ni ');
   poner(grupo, `Vista 3D provisional${falta ? ` (sin ${falta})` : ''} · calculando la exacta…`);
 }
 let capas3dPendientes = null;  // como mucho una actualización por fotograma

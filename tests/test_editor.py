@@ -727,3 +727,41 @@ def test_los_extremos_de_un_camino_son_objetivos_del_iman():
     c = camino((-0.2, 0), (0.1, 0.05), (0.2, 0.3))
     extremos = [(a, b) for a, b, _ in editor.bordes_rectos([c]) if a == b]
     assert extremos == [([-0.2, 0], [-0.2, 0]), ([0.2, 0.3], [0.2, 0.3])]
+
+
+# ---------- G4: booleanas y aplanar
+@pytest.mark.parametrize("op, fn", [("unir", "union"), ("restar", "difference"), ("intersecar", "intersection"),
+                                    ("excluir", "symmetric_difference")])
+def test_cada_operacion_es_la_de_shapely(op, fn):
+    """Criterio de G4: la planta con cada operación coincide con shapely sobre las mismas formas."""
+    a = {"op": "unir", "anillos": [[[-0.3, -0.2], [0.1, -0.2], [0.1, 0.2], [-0.3, 0.2]]]}
+    b = {"op": op, "anillos": [[[-0.1, -0.1], [0.3, -0.1], [0.3, 0.3], [-0.1, 0.3]]]}
+    esperado = getattr(editor.forma_de(a), fn)(editor.forma_de(b))
+    assert editor.planta([a, b]).symmetric_difference(esperado).area < 1e-9
+
+
+def test_booleana_de_varias_capas():
+    cuadro = lambda x: {"op": "restar", "anillos": [[[x, 0], [x + 0.2, 0], [x + 0.2, 0.2], [x, 0.2]]]}  # noqa: E731
+    capas = [cuadro(0), cuadro(0.1), cuadro(0.15)]  # la op de cada una no cuenta
+    area = lambda op: editor.forma_capa(editor.booleana(capas, op)).area  # noqa: E731
+    assert abs(area("unir") - 0.35 * 0.2) < 1e-6 and abs(area("intersecar") - 0.05 * 0.2) < 1e-6
+    assert abs(area("restar") - 0.1 * 0.2) < 1e-6 and abs(area("excluir") - (0.1 + 0.05 + 0.05) * 0.2) < 1e-6
+
+
+def test_aplanar_shou_cruz_cortado_sigue_aprobado(salida):
+    """Criterio de G4: aplanar las piezas de shou-cruz cortadas con las 40 sugerencias y
+    generarlo sigue APROBADO con el verificador, con ≤ 1,2 × los nodos del símbolo sin cortar."""
+    import itertools
+    doc = editor.piezas_curvas("shou-cruz")
+    capas = [{**c, "id": i + 1} for i, c in enumerate(en_mundo(doc))]
+    sig = itertools.count(100)
+    for linea in editor.sugerencias(capas):
+        aplicar(capas, linea, sig)
+    assert len(capas) >= 20
+    anillos = editor.aplanar(capas)
+    nodos = lambda a: sum(map(len, a))  # noqa: E731
+    assert nodos(anillos) <= 1.2 * nodos([a for c in doc["capas"] for a in c["anillos"]]), nodos(anillos)
+    plana = [{"op": "unir", "anillos": anillos}]
+    editor.generar("aplanado", doc, plana)
+    codigo, v = verificar(salida / "glb" / "aplanado.glb", RAIZ / "fuentes" / "shou-cruz.png")
+    assert codigo == 0 and v["aprobado"], v

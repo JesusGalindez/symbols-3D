@@ -8,8 +8,18 @@ import { arrancar, abrirEditor, puntoEnCapa, comprobar, resumen } from './comun.
 const PRESUPUESTO = 16;
 const e = await arrancar(8794);
 try {
-  for (const simbolo of ['xi-doble', 'shou-cruz', 'shou-circular']) {
-    const { p } = await abrirEditor(e.chrome, e.url, simbolo);
+  // el último: shou-circular con un rectángulo que interseca encima (G4): la vista
+  // provisional recorta lo de debajo con un clipPath
+  for (const simbolo of ['xi-doble', 'shou-cruz', 'shou-circular', 'shou-circular+intersecar']) {
+    const { p } = await abrirEditor(e.chrome, e.url, simbolo.split('+')[0]);
+    if (simbolo.endsWith('+intersecar')) {
+      const [a, b] = await p.evaluate(() => [window.editor.aCliente(0, 0.6), window.editor.aCliente(0.6, -0.6)]);
+      await p.keyboard.press('r');
+      await p.mouse.move(...a); await p.mouse.down(); await p.mouse.move(...b, { steps: 4 }); await p.mouse.up();
+      await p.select('[data-p=op]', 'intersecar');
+      await p.keyboard.press('Escape');
+      await p.waitForFunction(() => window.editor.exacta(), { timeout: 60000 });
+    }
     const pto = await puntoEnCapa(p);
     const { mediana, p90 } = await p.evaluate(([x, y]) => {
       const el = document.elementFromPoint(x, y);
@@ -25,8 +35,8 @@ try {
       t.sort((a, b) => a - b);
       return { mediana: t[20], p90: t[36] };
     }, pto);
-    const texto = `${simbolo.padEnd(14)} mediana ${mediana.toFixed(1)} ms · p90 ${p90.toFixed(1)} ms`;
-    if (simbolo === 'shou-circular') comprobar(mediana <= PRESUPUESTO, `${texto} (presupuesto ${PRESUPUESTO} ms)`);
+    const texto = `${simbolo.padEnd(25)} mediana ${mediana.toFixed(1)} ms · p90 ${p90.toFixed(1)} ms`;
+    if (simbolo.startsWith('shou-circular')) comprobar(mediana <= PRESUPUESTO, `${texto} (presupuesto ${PRESUPUESTO} ms)`);
     else console.log(`       ${texto}`);
     await p.close();
   }

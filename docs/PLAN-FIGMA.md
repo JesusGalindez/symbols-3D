@@ -405,6 +405,21 @@ de `shou-cruz` cortadas con las 40 sugerencias y generarlo sigue **APROBADO** co
 verificador; aplanar reduce los nodos (≤ 1,2 × los del símbolo abierto sin cortar);
 presupuesto de 16 ms con una capa que interseca en `shou-circular`.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). Sobre lo previsto:
+- **Sondeo de la vista provisional:** gana la opción (a) para intersecar: cada capa que
+  interseca envuelve lo de debajo en un `<g clip-path>` (0,6 ms de mediana arrastrando en
+  `shou-circular` con un rectángulo que interseca, ahora en `tests/rendimiento.mjs`).
+  Fuera de la vista provisional el recorte se quita por CSS: si no, lo de debajo no se
+  podría elegir con el ratón. **Excluir** no se puede pintar por capas: se ve su
+  contorno, rotulado «sin «excluir»», hasta que llega la exacta.
+- **Aplanar y las booleanas usan la tolerancia de abrir símbolos** (2e-4), no la fina de
+  los trazos: con la fina, `shou-cruz` aplanado tenía 334 nodos (el doble del símbolo sin
+  cortar); con la de los símbolos, ≤ 1,2 × y el verificador lo aprueba.
+- Aplanar avisa si la selección tenía restas o intersecciones y había capas debajo: al
+  aplanar dejan de afectarles, como en Figma.
+Medido: pytest 62 en verde (con `shou-cruz` aplanado APROBADO por el verificador),
+`test:ui` 138 en verde.
+
 **Tarea de usuario (3 min):** hacer un sello redondo: un círculo, «intersecar» con
 `fu-trazo` para quedarse con lo que cae dentro, aplanar y generar. Hecho si: APROBADO.
 
