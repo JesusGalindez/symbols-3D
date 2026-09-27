@@ -1178,6 +1178,46 @@ try {
     await s.close();
   }
 
+  // Engrosar y adelgazar rápido: arrastrar la etiqueta «Grosor» (un solo paso de deshacer),
+  // ⌥] / ⌥[ y el tirador «↔» con su vista previa
+  {
+    const cuadro = (id, nombre, [x, y, w, h]) => ({ id, nombre, op: 'unir', visible: true, t: { x, y, r: 0, sx: 1, sy: 1 },
+      anillos: [[[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map((p) => ({ p, ent: null, sal: null, tipo: 'vivo' }))] });
+    mkdirSync(join(e.salida, 'editor'), { recursive: true });
+    const trazo = { id: 2, nombre: 'Trazo', op: 'unir', visible: true, abierto: true, t: { x: 0, y: 0.3, r: 0, sx: 1, sy: 1 },
+      trazo: { ancho: 0.03, extremos: 'redondo', uniones: 'redonda', inglete: 4, posicion: 'centro' },
+      anillos: [[[-0.3, 0], [0.3, 0]].map((p) => ({ p, ent: null, sal: null, tipo: 'vivo' }))] };
+    writeFileSync(join(e.salida, 'editor', 'grosor.json'), JSON.stringify({ version: 3, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      capas: [cuadro(1, 'Pieza', [0, -0.1, 0.3, 0.2]), trazo] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'grosor');
+    const capa = (id) => s.evaluate((id) => window.editor.doc().capas.find((c) => c.id === id), id);
+    await s.click('#capas li[data-id="2"] .nom');
+    const antes = await s.evaluate(() => JSON.stringify(window.editor.doc()));
+    const et = await s.$eval('[data-tr=ancho]', (i) => { const r = i.parentElement.getBoundingClientRect(); return [r.x + 12, r.y + 6]; });
+    await s.mouse.move(...et); await s.mouse.down(); await s.mouse.move(et[0] + 20, et[1], { steps: 10 }); await s.mouse.up();
+    const a1 = (await capa(2)).trazo.ancho;
+    comprobar(Math.abs(a1 - 0.05) < 1e-9, `arrastrar 20 px la etiqueta «Grosor» lo sube de 0,03 a ${a1}`);
+    await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.up('Meta');
+    comprobar(await s.evaluate(() => JSON.stringify(window.editor.doc())) === antes, 'y un solo ⌘Z lo deshace entero');
+    await s.keyboard.down('Alt'); await s.keyboard.press('BracketLeft'); await s.keyboard.up('Alt');
+    await s.waitForFunction(() => window.editor.doc().capas.find((c) => c.id === 2).trazo.ancho < 0.03, { timeout: 10000 });
+    comprobar(Math.abs((await capa(2)).trazo.ancho - 0.028) < 1e-12, '⌥[ adelgaza el trazo 0,001 por lado (grosor 0,028)');
+    // una pieza rellena: ⌥] la engorda; «↔» arrastrado a la derecha, más
+    await s.click('#capas li[data-id="1"] .nom');
+    const ancho = async () => { const c = await capa(1); const xs = c.anillos.flat().map((n) => n.p[0]); return Math.max(...xs) - Math.min(...xs); };
+    await s.keyboard.down('Alt'); await s.keyboard.down('Shift'); await s.keyboard.press('BracketRight'); await s.keyboard.up('Shift'); await s.keyboard.up('Alt');
+    await s.waitForFunction(() => { const c = window.editor.doc().capas.find((c) => c.id === 1), xs = c.anillos.flat().map((n) => n.p[0]); return Math.max(...xs) - Math.min(...xs) > 0.305; }, { timeout: 10000 });
+    comprobar(Math.abs(await ancho() - 0.31) < 1e-6, `⇧⌥] engorda la pieza 0,005 por lado (ancho 0,3 → ${(await ancho()).toFixed(4)})`);
+    const t = await s.$eval('.tirador-desplazar', (x) => { const r = x.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    await s.mouse.move(...t); await s.mouse.down(); await s.mouse.move(t[0] + 20, t[1], { steps: 6 });
+    comprobar(await s.$$eval('#mundoSobre .previa-desplazar', (l) => l.length) === 1, 'arrastrando «↔» se ve la forma nueva antes de soltar');
+    await s.mouse.up();
+    await s.waitForFunction(() => { const c = window.editor.doc().capas.find((c) => c.id === 1), xs = c.anillos.flat().map((n) => n.p[0]); return Math.max(...xs) - Math.min(...xs) > 0.315; }, { timeout: 10000 });
+    comprobar(Math.abs(await ancho() - 0.33) < 1e-6 && await s.$$eval('#mundoSobre .previa-desplazar', (l) => l.length) === 0,
+      `y al soltar se aplica: +0,01 por lado (ancho ${(await ancho()).toFixed(4)})`);
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {

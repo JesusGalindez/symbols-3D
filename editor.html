@@ -60,6 +60,12 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #props{overflow:auto;border-top:1px solid var(--borde);flex:1 1 60%}
 .rejilla{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px;padding:0 12px 8px}
 .rejilla label{display:flex;flex-direction:column;gap:2px;color:var(--tenue);font-size:11px}
+/* arrastrar sobre la etiqueta de un campo numérico cambia su valor, como en Figma */
+.rejilla label.arrastrable{cursor:ew-resize;user-select:none}
+.rejilla label.arrastrable input{cursor:text}
+.tirador-desplazar{cursor:ew-resize;user-select:none;padding:4px 8px;border:1px dashed var(--borde);border-radius:5px;color:var(--tenue)}
+.tirador-desplazar:hover{color:var(--texto);border-color:var(--acento)}
+#mundoSobre .previa-desplazar{pointer-events:none;vector-effect:none}
 .rejilla label.ancho{grid-column:1/-1}
 .nota{color:var(--tenue);padding:0 12px 8px;font-size:11px}
 .revision{list-style:none;margin:0;padding:0 12px 10px;font-size:11px}
@@ -232,7 +238,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
   <h4>Vista</h4><dl><dt>Rueda</dt><dd>Desplazar</dd><dt>⌘ + rueda · pellizco</dt><dd>Zoom</dd><dt>Espacio + arrastrar</dt><dd>Mover el lienzo</dd>
     <dt>⌥ con algo elegido</dt><dd>Medir distancias (a la capa bajo el ratón o al círculo)</dd><dt>⇧R</dt><dd>Reglas; arrastrar desde una saca una guía (de vuelta a la regla, se borra)</dd>
     <dt>⇧1 · ⇧2 · ⇧0</dt><dd>Ajustar a todo · a la selección · 100 %</dd><dt>⌘+ · ⌘−</dt><dd>Acercar · alejar</dd></dl>
-  <h4>Campos</h4><dl><dt>0,2*3 · (1+2)/4</dt><dd>Operaciones</dd><dt>+0,01 · *2 · /2</dt><dd>Sobre el valor actual</dd><dt>50%</dt><dd>Del valor actual</dd></dl>
+  <h4>Campos</h4><dl><dt>Arrastrar la etiqueta</dt><dd>Cambia el valor (⇧: más fino)</dd><dt>⌥] · ⌥[</dt><dd>Engrosar · adelgazar 0,001 por lado (⇧: 0,005)</dd><dt>↔ Arrastrar (Trazo)</dt><dd>Engrosar o adelgazar viendo el resultado</dd><dt>0,2*3 · (1+2)/4</dt><dd>Operaciones</dd><dt>+0,01 · *2 · /2</dt><dd>Sobre el valor actual</dd><dt>50%</dt><dd>Del valor actual</dd></dl>
   <h4>Archivos</h4><dl><dt>Abrir → Importar SVG…</dt><dd>Un logotipo con sus curvas, una capa por figura</dd>
     <dt>⇧⌘E · Exportar</dt><dd>SVG (diseño o selección, con curvas) y PNG 1×, 2×, 4×</dd><dt>Historial · ⌥⌘S</dt><dd>Copias con miniatura: comparar y restaurar · guardar una versión con nombre</dd><dt>Generar GLB</dt><dd>Detallada, ligera y web, con su revisión</dd>
     <dt>? · Esc</dt><dd>Abrir y cerrar esta ayuda</dd></dl>
@@ -1084,6 +1090,7 @@ function panel() {
     (generado.comprobaciones.some((c) => c.que === 'trazo fino' && !c.pasa)
       ? `<div class="fila"><button id="bEngrosar" title="Engrosa lo justo las capas de las piezas que el redondeo se come">Engrosar lo necesario</button></div>` : '');
   $('#props').innerHTML = html;
+  for (const i of $('#props').querySelectorAll('.rejilla label input[inputmode="decimal"]')) i.parentElement.classList.add('arrastrable');
 }
 
 $('#props').addEventListener('change', (e) => {
@@ -1249,6 +1256,67 @@ function renombrar() {
 }
 
 // ---------- historia
+// Arrastrar sobre la etiqueta de un campo (Figma): cada píxel suma un paso al valor (con ⇧,
+// uno diez veces menor); los cambios del arrastre se aplican en vivo y cuentan como un solo
+// paso de deshacer. Engrosar/adelgazar arrastrando «↔» enseña la forma nueva sobre la capa
+// (un trazo de SVG del doble del desplazamiento) y la pide al servidor al soltar.
+const PASO_CAMPO = { r: 0.5, lados: 0.1, puntas: 0.1, orden: 0.05, interior: 0.002, inicio: 0.5, barrido: 0.5 };
+let arrastreCampo = null;
+function juntarHistoria(desde) {  // lo hecho desde el paso «desde», en un solo paso
+  if (puntero - desde <= 1) return;
+  historia.splice(desde + 1, puntero - desde - 1); selHistoria.splice(desde + 1, puntero - desde - 1);
+  puntero = desde + 1;
+}
+document.addEventListener('pointerdown', (e) => {
+  const label = e.target.closest?.('#props .rejilla label'), inp = label?.querySelector('input[inputmode="decimal"]');
+  if (label && inp && e.target !== inp && !inp.disabled) {
+    const clave = [...inp.attributes].find((a) => a.name.startsWith('data-'));
+    arrastreCampo = { selector: `[${clave.name}="${clave.value}"]`, x: e.clientX, v0: evaluar(inp.value, 0), paso: PASO_CAMPO[clave.value] ?? 0.001, desde: puntero };
+    e.preventDefault(); return;
+  }
+  if (e.target.closest?.('.tirador-desplazar') && capasSel().length) {
+    arrastreCampo = { desplazar: true, x: e.clientX, d: 0, cs: capasSel() };
+    e.preventDefault();
+  }
+});
+addEventListener('pointermove', (e) => {
+  const A = arrastreCampo; if (!A) return;
+  const px = e.clientX - A.x, fino = e.shiftKey ? 0.1 : 1;
+  if (A.desplazar) {
+    A.d = Math.round(px * 0.0005 * fino * 1e4) / 1e4;
+    estado(`${A.d >= 0 ? 'Engrosar' : 'Adelgazar'} ${Math.abs(A.d)} por lado · suelta para aplicar`);
+    previaDesplazar(A.cs, A.d); return;
+  }
+  const inp = $(A.selector); if (!inp) return;
+  const v = A.v0 + px * A.paso * fino, dec = A.paso >= 0.1 ? 1 : 4;
+  const nuevo = String(+v.toFixed(dec));
+  if (inp.value === nuevo) return;
+  inp.value = nuevo; inp.dispatchEvent(new Event('change', { bubbles: true }));
+});
+addEventListener('pointerup', () => {
+  const A = arrastreCampo; if (!A) return;
+  arrastreCampo = null;
+  if (A.desplazar) { previaDesplazar([], 0); if (A.d) desplazar(A.cs, A.d); else estado(''); return; }
+  juntarHistoria(A.desde); todo();
+});
+function previaDesplazar(cs, d) {  // la forma engordada o adelgazada, aproximada con un trazo del doble de d
+  const g = $('#mundoSobre');
+  for (const x of g.querySelectorAll('.previa-desplazar')) x.remove();
+  if (!d) return;
+  for (const c of cs.filter((k) => k.visible)) {
+    const tr = trazoDe(c), ancho = tr ? (tr.ancho + 2 * d) / escalaCapa(c.t) : 2 * Math.abs(d) / escalaCapa(c.t);
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    el.setAttribute('class', 'previa-desplazar'); el.setAttribute('transform', marcoCapa(c.t)); el.setAttribute('d', dCapa(c));
+    el.setAttribute('fill-rule', 'evenodd');
+    el.setAttribute('style', tr ? `fill:none;stroke:var(--acento);stroke-opacity:.55;stroke-width:${Math.max(0, ancho)};stroke-linecap:${LINECAP[tr.extremos]};stroke-linejoin:${LINEJOIN[tr.uniones]}`
+      : `fill:${d > 0 ? 'rgba(13,153,255,.45)' : 'var(--fondo)'};stroke:${d > 0 ? 'rgba(13,153,255,.45)' : 'var(--fondo)'};stroke-width:${ancho};stroke-linejoin:miter;stroke-miterlimit:4`);
+    g.appendChild(el);
+    if (d < 0) {  // adelgazar: lo que queda, encima
+      const k = el.cloneNode(); k.setAttribute('style', `fill:rgba(13,153,255,.45);stroke:none`); g.appendChild(k);
+      el.setAttribute('style', el.getAttribute('style').replace('fill:var(--fondo)', 'fill:none'));
+    }
+  }
+}
 function commit() {
   sincronizarInstancias();
   normalizar();
@@ -1943,6 +2011,9 @@ addEventListener('keydown', (e) => {
   if (mod && e.shiftKey && k === 'm') { e.preventDefault(); fusionarNodos(); return; }
   if (mod && (e.key === '+' || e.key === '=' || e.key === '-')) { e.preventDefault(); zoomPaso(e.key === '-' ? 0.5 : 2); return; }
   if (mod) return;
+  if (e.altKey && (e.code === 'BracketRight' || e.code === 'BracketLeft') && capasSel().length) {  // engrosar · adelgazar un paso
+    e.preventDefault(); desplazar(capasSel(), (e.code === 'BracketRight' ? 1 : -1) * (e.shiftKey ? 0.005 : 0.001)); return;
+  }
   if (e.altKey && e.shiftKey && ['KeyU', 'KeyS', 'KeyI', 'KeyE'].includes(e.code)) {
     e.preventDefault(); booleanaSel({ KeyU: 'unir', KeyS: 'restar', KeyI: 'intersecar', KeyE: 'excluir' }[e.code]); return;
   }
@@ -2328,7 +2399,8 @@ function panelTrazo(cs) {
   html += `<div class="fila">${hay ? '<button data-tr-accion="contornear" title="El trazo pasa a forma rellena con curvas (⇧⌘O)">Contornear</button>' : ''}
     ${cerradasSin ? '<button data-tr-accion="convertir" title="La forma pasa a ser el trazo de su contorno">Convertir en trazo</button>' : ''}
     ${cerradasCon ? '<button data-tr-accion="quitar" title="Vuelve a ser una forma rellena">Quitar trazo</button>' : ''}</div>
-    <div class="fila"><input type="number" id="dDesplazar" step="0.001" min="0" value="0.005" style="width:72px" title="Cuánto por cada lado">
+    <div class="fila"><span class="tirador-desplazar" title="Arrastra: a la derecha engorda, a la izquierda adelgaza (⇧: más fino). También ⌥] y ⌥[">↔ Arrastrar</span>
+    <input type="number" id="dDesplazar" step="0.001" min="0" value="0.005" style="width:72px" title="Cuánto por cada lado">
     <button data-desplazar="1" title="Engrosar: un trazo, su grosor; una forma, su contorno">Engrosar</button><button data-desplazar="-1">Adelgazar</button></div>`;
   html += `<h3>Repetir en círculo</h3><div class="fila"><input type="text" inputmode="decimal" id="nRepetir" value="6" style="width:52px" title="Cuántas en total">
     <button data-repetir="1" title="Copias giradas alrededor del centro del símbolo">Repetir alrededor del centro</button></div>`;
