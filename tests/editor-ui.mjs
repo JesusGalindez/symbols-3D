@@ -381,7 +381,7 @@ try {
       capas: [{ id: 1, nombre: 'Cuadrado', op: 'unir', visible: true, anillos: [[[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]]], t: { x: 0, y: 0, r: 0, sx: 1, sy: 1 } }] }));
     const { p: s } = await abrirEditor(e.chrome, e.url, 'viejo');
     const d = await s.evaluate(() => window.editor.doc());
-    comprobar(d.version === 2 && d.capas[0].anillos[0].every((n) => n.tipo === 'vivo' && n.ent === null), 'un documento de la versión 1 se abre como nodos vivos (versión 2)');
+    comprobar(d.version === 3 && d.capas[0].anillos[0].every((n) => n.tipo === 'vivo' && n.ent === null), 'un documento de la versión 1 se abre como nodos vivos (versión 3)');
     const area = await s.evaluate(() => window.editor.resultado().reduce((t, poli) => t + poli.reduce((u, a, k) => {
       let d = 0; for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; }
       return u + (k ? -1 : 1) * Math.abs(d / 2); }, 0), 0));
@@ -795,9 +795,82 @@ try {
     // ⌥⇧U: unir las dos que quedan
     await s.keyboard.down('Meta'); await s.keyboard.press('a'); await s.keyboard.up('Meta');
     await s.keyboard.down('Alt'); await s.keyboard.down('Shift'); await s.keyboard.press('KeyU'); await s.keyboard.up('Shift'); await s.keyboard.up('Alt');
-    await s.waitForFunction(() => window.editor.doc().capas.length === 1, { timeout: 10000 });
+    await s.waitForFunction(() => window.editor.doc().grupos?.length === 1, { timeout: 10000 });
     await esperaExacta();
-    comprobar(Math.abs(await area() - aE) < 1e-4 && (await s.evaluate(() => window.editor.doc().capas[0].nombre)) === 'Unión', '⌥⇧U une las elegidas en una capa «Unión»');
+    comprobar(Math.abs(await area() - aE) < 1e-4 && (await s.evaluate(() => window.editor.doc().grupos[0].booleana)) === 'unir', '⌥⇧U une las elegidas en un grupo booleano «Unión» (G5: no destructivo)');
+    await s.close();
+  }
+
+  // G5: grupos (agrupar, elegir, entrar, ⌘ + clic, Esc, desagrupar, deshacer, grupo
+  // booleano restar = restar las capas, arrastrar dentro y fuera en la lista)
+  {
+    const cuadro = (id, nombre, [x, y, w, h], r = 0) => ({ id, nombre, op: 'unir', visible: true, t: { x, y, r, sx: 1, sy: 1 },
+      anillos: [[[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map((p) => ({ p, ent: null, sal: null, tipo: 'vivo' }))] });
+    mkdirSync(join(e.salida, 'editor'), { recursive: true });
+    writeFileSync(join(e.salida, 'editor', 'grupos.json'), JSON.stringify({ version: 2, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      capas: [cuadro(1, 'A', [-0.1, 0, 0.4, 0.4], 0.3), cuadro(2, 'B', [0.1, 0, 0.3, 0.3], -0.2), cuadro(3, 'C', [0.05, 0.05, 0.1, 0.1], 0.5), cuadro(4, 'Suelta', [0, -0.4, 0.2, 0.1])] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'grupos');
+    const sel = () => s.evaluate(() => window.editor.seleccion());
+    const docTxt = () => s.evaluate(() => JSON.stringify(window.editor.doc()));
+    const mundoNodos = () => s.evaluate(() => window.editor.doc().capas.map((c) => c.anillos[0].map((n) => {
+      const co = Math.cos(c.t.r), si = Math.sin(c.t.r), [u, v] = n.p; return [c.t.x + co * u * c.t.sx - si * v * c.t.sy, c.t.y + si * u * c.t.sx + co * v * c.t.sy]; })));
+    const area = () => s.evaluate(() => window.editor.resultado().reduce((t, poli) => t + poli.reduce((u, a, k) => {
+      let d = 0; for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; }
+      return u + (k ? -1 : 1) * Math.abs(d / 2); }, 0), 0));
+    const esperaExacta = () => s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    await esperaExacta();
+    const aSueltas = await area(), antes = await docTxt(), n0 = await mundoNodos();
+    for (const id of [1, 2, 3]) { await s.keyboard.down('Shift'); await s.click(`#capas li[data-id="${id}"] .nom`); await s.keyboard.up('Shift'); }
+    await s.keyboard.down('Meta'); await s.keyboard.press('g'); await s.keyboard.up('Meta');
+    const g = await s.evaluate(() => window.editor.doc().grupos?.[0]);
+    comprobar(g && (await sel()).join() === String(g.id) && (await s.$$eval('#capas li.grupo', (l) => l.length)) === 1, '⌘G agrupa las tres y elige el grupo');
+    await esperaExacta();
+    comprobar(Math.abs(await area() - aSueltas) < 1e-9, 'un grupo normal de capas que unen no cambia la forma');
+    // clic en el lienzo elige el grupo; doble clic entra; ⌘ + clic elige la capa; Esc sube
+    await s.keyboard.press('Escape'); await s.keyboard.press('Escape');
+    const pC = await puntoEnCapa(s, 3);
+    await s.mouse.click(...pC);
+    comprobar((await sel()).join() === String(g.id), 'clic en una capa del grupo elige el grupo');
+    await s.mouse.click(...pC); await s.mouse.click(...pC);
+    comprobar((await sel()).join() === '3', 'doble clic entra en el grupo y elige la capa');
+    await s.keyboard.press('Escape');
+    comprobar((await sel()).join() === String(g.id), 'Esc sube al grupo');
+    await s.keyboard.press('Escape'); await s.keyboard.press('Escape');
+    await s.keyboard.down('Meta'); await s.mouse.click(...pC); await s.keyboard.up('Meta');
+    comprobar((await sel()).join() === '3', '⌘ + clic elige la capa directamente');
+    // mover el grupo mueve sus tres capas; desagrupar deja cada nodo donde estaba
+    await s.click(`#capas li[data-id="${g.id}"] .nom`);
+    await s.keyboard.press('ArrowRight'); await s.keyboard.press('ArrowLeft');
+    await s.keyboard.down('Meta'); await s.keyboard.down('Shift'); await s.keyboard.press('g'); await s.keyboard.up('Shift'); await s.keyboard.up('Meta');
+    const n1 = await mundoNodos();
+    let err = 0; n0.forEach((r, i) => r.forEach((q, j) => { err = Math.max(err, Math.hypot(q[0] - n1[i][j][0], q[1] - n1[i][j][1])); }));
+    comprobar(!(await s.evaluate(() => window.editor.doc().grupos)) && err < 1e-12, `desagrupar deja cada nodo en su sitio (error ${err.toExponential(1)})`);
+    // deshacer hasta antes de agrupar: el JSON idéntico
+    for (let i = 0; i < 4; i++) { await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.up('Meta'); }
+    comprobar(await docTxt() === antes, 'deshacer vuelve al JSON de antes de agrupar');
+    // grupo booleano «restar» = las capas sueltas con «restar»
+    for (const id of [1, 2, 3]) { await s.keyboard.down('Shift'); await s.click(`#capas li[data-id="${id}"] .nom`); await s.keyboard.up('Shift'); }
+    await s.keyboard.down('Alt'); await s.keyboard.down('Shift'); await s.keyboard.press('KeyS'); await s.keyboard.up('Shift'); await s.keyboard.up('Alt');
+    await esperaExacta();
+    const aGrupo = await area();
+    for (let i = 0; i < 1; i++) { await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.up('Meta'); }
+    for (const id of [2, 3]) { await s.click(`#capas li[data-id="${id}"] .nom`); await s.select('[data-p=op]', 'restar'); }
+    await esperaExacta();
+    comprobar(Math.abs(await area() - aGrupo) < 1e-6, `un grupo booleano «restar» da lo mismo que restar las capas sueltas (${aGrupo.toFixed(6)})`);
+    // arrastrar en la lista: «Suelta» dentro de un grupo nuevo de A y B, y otra vez fuera
+    for (let i = 0; i < 2; i++) { await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.up('Meta'); }
+    await s.click('#capas li[data-id="1"] .nom'); await s.keyboard.down('Shift'); await s.click('#capas li[data-id="2"] .nom'); await s.keyboard.up('Shift');
+    await s.keyboard.down('Meta'); await s.keyboard.press('g'); await s.keyboard.up('Meta');
+    const gid = (await sel())[0];
+    const fila = (id) => s.$eval(`#capas li[data-id="${id}"]`, (x) => { const r = x.getBoundingClientRect(); return [r.x + r.width / 2, r.y, r.height]; });
+    const arrastrarFila = async (id, destino, frac) => {
+      const [x, y, h] = await fila(id), [, y2, h2] = await fila(destino);
+      await s.mouse.move(x, y + h / 2); await s.mouse.down(); await s.mouse.move(x, y2 + h2 * frac, { steps: 6 }); await s.mouse.up();
+    };
+    await arrastrarFila(4, gid, 0.8);  // mitad de abajo de un grupo desplegado: dentro
+    comprobar((await s.evaluate(() => window.editor.doc().capas.find((c) => c.id === 4).grupo)) === gid, 'arrastrar a la mitad de abajo de un grupo la mete dentro');
+    await arrastrarFila(4, gid, 0.2);  // mitad de arriba: encima, fuera
+    comprobar((await s.evaluate(() => window.editor.doc().capas.find((c) => c.id === 4).grupo)) === undefined, 'y a la mitad de arriba la saca encima del grupo');
     await s.close();
   }
 
@@ -857,11 +930,12 @@ try {
   await p.close();
   writeFileSync(join(e.salida, 'editor', 'grande.json'), JSON.stringify({ version: 1, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
     capas: [{ id: 1, nombre: 'Disco', op: 'unir', visible: true, t: { x: 0, y: 0, r: 0, sx: 1, sy: 1 },
-      anillos: [Array.from({ length: 3000 }, (_, i) => [0.4 * Math.cos(i * 2 * Math.PI / 3000), 0.4 * Math.sin(i * 2 * Math.PI / 3000)])] }] }));
+      grupo: 9, anillos: [Array.from({ length: 9000 }, (_, i) => [0.4 * Math.cos(i * 2 * Math.PI / 9000), 0.4 * Math.sin(i * 2 * Math.PI / 9000)])] }],
+    grupos: [{ id: 9, nombre: 'Grupo', op: 'unir' }] }));
   const { p: g } = await abrirEditor(e.chrome, e.url, 'grande');
-  comprobar(await g.evaluate(() => JSON.stringify(window.editor.doc()).length) > 64 * 1024, 'el documento pasa de 64 KB');
+  comprobar(await g.evaluate(() => JSON.stringify(window.editor.doc()).length) > 200 * 1024, 'el documento pasa de 200 KB, con el disco dentro de un grupo');
   await pausa(2000);  // el guardado automático de 1,5 s deja en disco la versión migrada
-  await g.click('#capas li:nth-child(1)');
+  await g.keyboard.down('Meta'); await g.mouse.click(...await puntoEnCapa(g)); await g.keyboard.up('Meta');  // ⌘ + clic: la capa del grupo
   await g.keyboard.press('ArrowRight', { delay: 10 });
   const xAntes = await g.evaluate(() => window.editor.doc().capas.at(-1).t.x);
   await g.close({ runBeforeUnload: true });

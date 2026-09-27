@@ -765,3 +765,37 @@ def test_aplanar_shou_cruz_cortado_sigue_aprobado(salida):
     editor.generar("aplanado", doc, plana)
     codigo, v = verificar(salida / "glb" / "aplanado.glb", RAIZ / "fuentes" / "shou-cruz.png")
     assert codigo == 0 and v["aprobado"], v
+
+
+# ---------- G5: grupos
+@pytest.mark.parametrize("nombre", SIMBOLOS[:6])
+def test_meter_todo_en_un_grupo_no_cambia_la_planta(nombre):
+    """Criterio de G5 (regla 9): los símbolos de la galería, con todas sus capas dentro de
+    un grupo normal, dan la misma planta (diferencia simétrica < 1e-12)."""
+    capas = en_mundo(editor.piezas_curvas(nombre))
+    agrupadas = [{**c, "grupo": 1} for c in capas]
+    grupos = [{"id": 1, "nombre": "Todo", "op": "unir", "visible": True}]
+    a, b = editor.planta(capas), editor.planta(agrupadas, None, grupos)
+    assert a.symmetric_difference(b).area < 1e-12
+
+
+def test_grupo_booleano_restar_es_restar_las_capas():
+    """Un grupo booleano «restar» da lo mismo que las capas sueltas con «restar» (sin nada
+    debajo); con una capa debajo, el grupo solo resta dentro de sí."""
+    cuadro = lambda x, op="unir", **k: {"op": op, "anillos": [[[x, 0], [x + 0.3, 0], [x + 0.3, 0.3], [x, 0.3]]], **k}  # noqa: E731
+    sueltas = [cuadro(0), cuadro(0.1, "restar"), cuadro(0.2, "restar")]
+    grupo = [cuadro(0, grupo=5), cuadro(0.1, grupo=5), cuadro(0.2, grupo=5)]
+    g = [{"id": 5, "op": "unir", "booleana": "restar", "visible": True}]
+    assert editor.planta(sueltas).symmetric_difference(editor.planta(grupo, None, g)).area < 1e-12
+    debajo = [cuadro(-0.2)] + grupo  # la capa de abajo no la toca la resta del grupo
+    assert abs(editor.planta(debajo, None, g).area - (0.3 * 0.3 + 0.1 * 0.3 - 0.1 * 0.3)) < 1e-9
+
+
+def test_grupos_anidados_y_el_sitio_de_un_grupo():
+    """Un grupo ocupa el sitio de su capa más baja: un grupo que interseca, con una capa
+    encima fuera de él que une, deja esa capa entera."""
+    cuadro = lambda x, y, w, op="unir", **k: {"op": op, "anillos": [[[x, y], [x + w, y], [x + w, y + w], [x, y + w]]], **k}  # noqa: E731
+    capas = [cuadro(0, 0, 0.4), cuadro(0.2, 0.2, 0.4, grupo=2), cuadro(0.3, 0.3, 0.05, grupo=3), cuadro(0.9, 0, 0.1)]
+    grupos = [{"id": 2, "op": "intersecar", "visible": True}, {"id": 3, "op": "unir", "grupo": 2, "visible": True}]
+    # grupo 2 = cuadro 0,2..0,6 ∪ (grupo 3: cuadrito) → interseca con el de abajo (0..0,4): 0,2 × 0,2
+    assert abs(editor.planta(capas, None, grupos).area - (0.2 * 0.2 + 0.1 * 0.1)) < 1e-9

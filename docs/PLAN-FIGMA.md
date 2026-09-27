@@ -475,6 +475,28 @@ sueltas con «restar»; deshacer tras agrupar vuelve al JSON idéntico; el parch
 dentro de un grupo, y otra con un documento de 200 KB); `test:ui` y pytest enteros en
 verde; presupuesto de 16 ms.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). **Cambio sobre el formato previsto,
+tras el sondeo:** en vez de `raiz` con `hijos` anidados, `doc.capas` sigue siendo la pila
+de capas (hojas) en orden de pintado, `doc.grupos` son los grupos y capas y grupos dicen
+su padre en `grupo`. Es el mismo árbol, pero cuchilla, imán, exportar, el parche de
+`pagehide`, deshacer y todo lo que recorre `doc.capas` siguen igual; `normalizar()` (en
+cada `commit`) deja seguidos los miembros de cada grupo y quita los vacíos. Además:
+- **Los grupos no tienen transformación propia:** moverlos, girarlos o escalarlos actúa
+  sobre sus capas (como la selección múltiple), y su ojo y su candado sobre sus capas.
+  Así agrupar y desagrupar no tocan ni un nodo (error 0).
+- Versión 3 (`migrar()`); una de la 2 se abre igual y la planta no cambia (con todas sus
+  capas en un grupo, diferencia < 1e-12 en los 6 símbolos probados).
+- `/api/combinar` en `shou-circular`: 9 ms con el árbol frente a 10 ms con la lista (sin
+  empeorar; el sondeo pedía menos del 10 % más).
+- Los botones booleanos (⌥⇧U, S, I, E) crean ya un grupo booleano no destructivo;
+  aplanar sigue siendo ⌘E.
+- Pegar capas copiadas de otro documento las deja sueltas (o en el grupo de lo elegido):
+  el portapapeles no lleva los grupos.
+- La vista provisional pinta los grupos como si fueran capas sueltas; si algún grupo es
+  booleano o tiene operaciones que no son «unir», se rotula.
+Medido: pytest 70 en verde, `test:ui` 149 en verde (incluido el parche de `pagehide` con
+un documento de más de 200 KB y el disco dentro de un grupo); arrastre en presupuesto.
+
 **Tarea de usuario (5 min):** en `shou-cruz` cortado en trazos, agrupar los cuatro
 ganchos, girar el grupo 90° y entrar para mover un gancho suelto. Hecho si: generado y
 APROBADO, y reabrir el documento lo muestra igual.

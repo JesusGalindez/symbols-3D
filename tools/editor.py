@@ -151,7 +151,7 @@ def trazo_svg(anillos, K=1000, abierto=False):
     return "".join(d)
 
 
-def exportar_svg(capas, simetria, color):
+def exportar_svg(capas, simetria, color, grupos=None):
     """El diseño como SVG con curvas, sin el redondeo del acabado (ese es del GLB). Solo
     capas que unen y sin simetría: una ruta por capa con sus nodos tal cual (limpio para
     Figma o Illustrator, con el nombre de cada capa). Con restas o simetría, la forma
@@ -163,13 +163,13 @@ def exportar_svg(capas, simetria, color):
     if not visibles:
         raise ValueError("no hay ninguna capa visible que exportar")
     centrado = lambda c: not c.get("trazo") or {**TRAZO, **c["trazo"]}["posicion"] == "centro"  # noqa: E731
-    if simetria is None and all(c["op"] == "unir" and centrado(c) for c in visibles):
+    if simetria is None and not grupos and all(c["op"] == "unir" and centrado(c) for c in visibles):
         # un trazo sale como trazo de SVG (editable en Figma); dentro/fuera no existen en SVG
         rutas = [(c.get("nombre", f"Capa {i + 1}"), [a for a in c["anillos"] if a and isinstance(a[0], dict)], c)
                  for i, c in enumerate(visibles)]
         pts = [q for c in visibles for p in s.lista(forma_de(c)) for q in p.exterior.coords]
     else:
-        geo = planta(visibles, simetria)
+        geo = planta(visibles, simetria, grupos)
         if geo.is_empty:
             raise ValueError("no queda ninguna forma que exportar")
         anillos = [curvas.ajustar_anillo(list(a.coords)[:-1], TOL_CURVAS)[0]
@@ -276,12 +276,12 @@ def desplazar(capas, d):
     return out
 
 
-def engrosar_lo_necesario(capas, bisel, simetria=None, hasta=0.03):
+def engrosar_lo_necesario(capas, bisel, simetria=None, hasta=0.03, grupos=None):
     """«Generar» rechazó por trazo fino: el menor d (± 1e-4) que, aplicado a las capas que
     forman las piezas que pierden demasiado al redondear, deja todas por debajo de
     simbolo.PERDIDA_MAX. Devuelve d y las capas cambiadas (desplazar())."""
     perdida = lambda base: s.area_perdida(base, acabar(base, bisel))  # noqa: E731
-    base = planta(capas, simetria)
+    base = planta(capas, simetria, grupos)
     if perdida(base) <= s.PERDIDA_MAX:
         return {"d": 0.0, "capas": []}
     malas = [p for p in s.lista(base) if p.area > 0 and 1 - acabar(p, bisel).intersection(p).area / p.area > s.PERDIDA_MAX]
@@ -293,12 +293,12 @@ def engrosar_lo_necesario(capas, bisel, simetria=None, hasta=0.03):
         return [({**c, "trazo": {**c["trazo"], "ancho": float({**TRAZO, **c["trazo"]}["ancho"]) + 2 * d}} if c.get("trazo")
                  else {**c, "anillos": [list(a.coords)[:-1] for p in s.lista(forma_de(c).buffer(d, join_style="mitre", mitre_limit=4.0))
                                         for a in [p.exterior, *p.interiors]]}) if id(c) in ids else c for c in capas]
-    if perdida(planta(con(hasta), simetria)) > s.PERDIDA_MAX:
+    if perdida(planta(con(hasta), simetria, grupos)) > s.PERDIDA_MAX:
         raise ValueError(f"ni engrosando {hasta:g} por lado aprueba")
     lo, hi = 0.0, hasta
     while hi - lo > 5e-5:
         mid = (lo + hi) / 2
-        lo, hi = (lo, mid) if perdida(planta(con(mid), simetria)) <= s.PERDIDA_MAX else (mid, hi)
+        lo, hi = (lo, mid) if perdida(planta(con(mid), simetria, grupos)) <= s.PERDIDA_MAX else (mid, hi)
     return {"d": hi, "capas": desplazar(culpables, hi)}
 
 
@@ -312,6 +312,52 @@ def forma_capa(anillos):
         if len(a) >= 3:
             forma = forma.symmetric_difference(anillo_valido(a))
     return forma
+
+
+def arbol(capas, grupos=None):
+    """La pila de capas con sus grupos (G5). doc.capas es la pila de hojas en orden de
+    pintado y doc.grupos los grupos; capas y grupos dicen su padre en "grupo". Un grupo
+    ocupa en la pila de su padre el sitio de su capa más baja. Un grupo normal combina sus
+    hijos de abajo arriba desde vacío, con la operación de cada uno, y entra en la pila de
+    su padre con la suya; uno booleano ("booleana": unir, restar, intersecar, excluir) los
+    combina con esa operación sin mirar la de cada hijo (restar: el de abajo menos los
+    demás), como Figma. Un grupo sin capas (todas ocultas) no cuenta."""
+    grupos = grupos or []
+    hijos = {}
+    for i, c in enumerate(capas):
+        hijos.setdefault(c.get("grupo"), []).append(("capa", i, c))
+    for g in grupos:
+        hijos.setdefault(g.get("grupo"), []).append(("grupo", None, g))
+    cache = {}
+
+    def pos(item):  # el sitio en la pila del padre: el de su hoja más baja
+        tipo, i, x = item
+        if tipo == "capa":
+            return i
+        if x["id"] not in cache:
+            cache[x["id"]] = min((pos(h) for h in hijos.get(x["id"], [])), default=math.inf)
+        return cache[x["id"]]
+
+    def forma_item(item):
+        return shapely.set_precision(forma_de(item[2]), PRECISION) if item[0] == "capa" else resultado(item[2])
+
+    def resultado(g):
+        items = sorted((h for h in hijos.get(g["id"] if g else None, []) if pos(h) < math.inf), key=pos)
+        if g and g.get("booleana"):
+            formas = [forma_item(h) for h in items]
+            if not formas:
+                return Polygon()
+            geo = formas[0]
+            if g["booleana"] == "restar":
+                return geo.difference(unary_union(formas[1:])) if formas[1:] else geo
+            for f in formas[1:]:
+                geo = combinar(geo, f, g["booleana"])
+            return geo
+        geo = Polygon()
+        for h in items:
+            geo = combinar(geo, forma_item(h), h[2].get("op", "unir"))
+        return geo
+    return resultado(None)
 
 
 def combinar(geo, forma, op):
@@ -328,13 +374,11 @@ def combinar(geo, forma, op):
     raise ValueError(f"operación desconocida: {op}")
 
 
-def aplanar(capas):
+def aplanar(capas, grupos=None):
     """⌘E: las capas (contiguas, de abajo arriba) combinadas entre ellas desde vacío, como
     una sola forma con curvas. Lo que sus restas o intersecciones hacían a las capas de
     debajo de la selección deja de hacerse (como en Figma); el navegador lo avisa."""
-    geo = Polygon()
-    for c in capas:
-        geo = combinar(geo, shapely.set_precision(forma_de(c), PRECISION), c["op"])
+    geo = arbol(capas, grupos)
     geo = unary_union([p for p in s.lista(geo.buffer(0)) if p.area > 1e-7])
     if geo.is_empty:
         raise ValueError("no queda ninguna forma al aplanar")
@@ -366,13 +410,10 @@ def booleana(capas, op):
     return a_curvas(geo, TOL_CURVAS)
 
 
-def planta(capas, simetria=None):
-    """Capas en coordenadas del mundo, de abajo arriba, cada una con su operación (combinar).
-    Sin el redondeo del acabado (con él, geometria())."""
-    geo = Polygon()
-    for c in capas:
-        forma = shapely.set_precision(forma_de(c), PRECISION)
-        geo = combinar(geo, forma, c["op"])
+def planta(capas, simetria=None, grupos=None):
+    """Capas en coordenadas del mundo, de abajo arriba, cada una con su operación (combinar),
+    y sus grupos (arbol()). Sin el redondeo del acabado (con él, geometria())."""
+    geo = arbol(capas, grupos)
     geo = simetrizar(geo, simetria)
     return unary_union([p for p in s.lista(geo.buffer(0)) if p.area > 1e-7])
 
@@ -385,8 +426,8 @@ def acabar(geo, bisel, esquina=None):
     return unary_union([p for p in s.lista(g) if p.area > 1e-7])
 
 
-def geometria(capas, bisel, simetria=None):
-    return acabar(planta(capas, simetria), bisel)
+def geometria(capas, bisel, simetria=None, grupos=None):
+    return acabar(planta(capas, simetria, grupos), bisel)
 
 
 def simetrizar(geo, simetria):
@@ -633,7 +674,7 @@ def malla(nombre, doc, capas, carpeta, ligera=False, base=None):
     la vista 3D del editor (/api/previa): lo que se ve es exactamente lo que se genera.
     base: la planta ya combinada, si se tiene (generar la reutiliza para la ligera)."""
     a = doc["ajustes"]
-    base = planta(capas, doc.get("simetria")) if base is None else base
+    base = planta(capas, doc.get("simetria"), doc.get("grupos")) if base is None else base
     geo = acabar(base, float(a["bisel"]), LIGERA["esquina"] if ligera else None)
     if geo.is_empty:
         raise ValueError("no queda ninguna forma que generar")
@@ -683,7 +724,7 @@ def generar(nombre, doc, capas):
     if protegido(nombre):
         raise ValueError(f"glb/{nombre}.glb no salió del editor: elige otro nombre")
     guardar(nombre, doc)
-    base = planta(capas, doc.get("simetria"))
+    base = planta(capas, doc.get("simetria"), doc.get("grupos"))
     info = malla(nombre, doc, capas, SALIDA, base=base)
     comprobaciones = revisar(SALIDA / "glb" / f"{nombre}.glb", base, float(doc["ajustes"]["bisel"]))
     aprobado = all(ok for _, ok, _ in comprobaciones)
@@ -716,8 +757,9 @@ def previa(doc, capas):
 # un editor anterior que ignorase un campo nuevo (p. ej. un trazo) lo borraría en silencio
 # al guardar.
 CAMPOS = {
-    "doc": {"version", "origen", "capas", "ajustes", "simetria", "guias"},
-    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto"},
+    "doc": {"version", "origen", "capas", "ajustes", "simetria", "guias", "grupos"},
+    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto", "grupo"},
+    "grupo": {"id", "nombre", "op", "booleana", "visible", "abierto", "bloqueada", "grupo"},
     "nodo": {"p", "ent", "sal", "tipo"},
 }
 
@@ -725,6 +767,8 @@ CAMPOS = {
 def validar(doc):
     """ValueError con los campos desconocidos del documento, si los hay."""
     raros = set(doc) - CAMPOS["doc"]
+    for g in doc.get("grupos", []):
+        raros |= {f"grupo.{k}" for k in set(g) - CAMPOS["grupo"]}
     for c in doc.get("capas", []):
         raros |= {f"capa.{k}" for k in set(c) - CAMPOS["capa"]}
         for a in c.get("anillos", []) if isinstance(c.get("anillos"), list) else []:
@@ -812,7 +856,7 @@ class Manejador(SimpleHTTPRequestHandler):
         datos = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         if self.path == "/api/combinar":
             try:
-                geo = geometria(datos["capas"], float(datos["bisel"]), datos.get("simetria"))
+                geo = geometria(datos["capas"], float(datos["bisel"]), datos.get("simetria"), datos.get("grupos"))
                 bordes = bordes_rectos(datos["capas"])
             except Exception as e:  # geometría imposible a mitad de edición: se dice, no se cae
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
@@ -843,19 +887,20 @@ class Manejador(SimpleHTTPRequestHandler):
         if self.path in ("/api/contornear", "/api/desplazar", "/api/engrosar", "/api/aplanar", "/api/booleana"):
             try:
                 if self.path == "/api/aplanar":
-                    return self.responder({"anillos": aplanar(datos["capas"])})
+                    return self.responder({"anillos": aplanar(datos["capas"], datos.get("grupos"))})
                 if self.path == "/api/booleana":
                     return self.responder({"anillos": booleana(datos["capas"], datos["op"])})
                 if self.path == "/api/contornear":
                     return self.responder({"capas": contornear(datos["capas"])})
                 if self.path == "/api/desplazar":
                     return self.responder({"capas": desplazar(datos["capas"], float(datos["d"]))})
-                return self.responder(engrosar_lo_necesario(datos["capas"], float(datos["bisel"]), datos.get("simetria")))
+                return self.responder(engrosar_lo_necesario(datos["capas"], float(datos["bisel"]), datos.get("simetria"),
+                                                            grupos=datos.get("grupos")))
             except Exception as e:
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
         if self.path == "/api/svg":
             try:
-                texto = exportar_svg(datos["capas"], datos.get("simetria"), datos["color"])
+                texto = exportar_svg(datos["capas"], datos.get("simetria"), datos["color"], datos.get("grupos"))
             except Exception as e:
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
             return self.responder({"svg": texto})

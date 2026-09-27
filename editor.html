@@ -41,6 +41,8 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #ayuda dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;break-inside:avoid}
 #ayuda dt{font-weight:600;white-space:nowrap}
 #ayuda dd{margin:0;color:var(--tenue)}
+#capas .pliegue{background:none;border:0;padding:0;width:12px;color:var(--tenue)}
+#capas li.grupo .nom{font-weight:600}
 #capas .ojo{background:none;border:0;padding:0 2px;color:var(--tenue)}
 #capas .op{width:14px;text-align:center;color:var(--tenue)}
 #capas .nom{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -176,7 +178,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
   <h4>Herramientas</h4><dl><dt>V</dt><dd>Mover</dd><dt>R · O</dt><dd>Rectángulo · elipse (⇧: proporción)</dd>
     <dt>P</dt><dd>Pluma: clic esquina, clic y arrastrar curva; clic en el primero cierra; Enter o Esc deja un camino abierto con trazo; clic en un extremo de un camino lo alarga</dd>
     <dt>⇧⌘O</dt><dd>Contornear trazo (pasa a forma rellena)</dd><dt>⌘E</dt><dd>Aplanar las elegidas (seguidas) en una forma</dd>
-    <dt>⌥⇧U · S · I · E</dt><dd>Unir · restar · intersecar · excluir las elegidas</dd>
+
     <dt>K</dt><dd>Cuchilla: clic en una línea azul o arrastrar una recta</dd><dt>Enter · doble clic</dt><dd>Nodos de la capa elegida</dd></dl>
   <h4>Selección</h4><dl><dt>Clic</dt><dd>Una capa</dd><dt>⇧ + clic</dt><dd>Sumar o quitar (también en la lista)</dd>
     <dt>Arrastrar en vacío</dt><dd>Recuadro: lo que toca</dd><dt>⌘A</dt><dd>Todas</dd><dt>Esc</dt><dd>Salir de nodos, soltar la selección</dd></dl>
@@ -185,6 +187,9 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <dt>⌘C · ⌘X · ⌘V</dt><dd>Copiar · cortar · pegar (también un SVG copiado de Figma)</dd><dt>⇧⌘V</dt><dd>Pegar en su sitio</dd>
     <dt>⌥ + arrastrar</dt><dd>Duplicar moviendo (luego ⌘D repite el desplazamiento)</dd><dt>⇧H · ⇧V</dt><dd>Voltear en horizontal · en vertical</dd>
     <dt>⌘S</dt><dd>Guardar (también se guarda solo)</dd></dl>
+  <h4>Grupos</h4><dl><dt>⌘G · ⇧⌘G</dt><dd>Agrupar · desagrupar</dd><dt>⌥⇧U · S · I · E</dt><dd>Grupo booleano (no destructivo)</dd>
+    <dt>Clic · doble clic</dt><dd>Elige el grupo · entra en él</dd><dt>⌘ + clic</dt><dd>La capa, aunque esté en un grupo</dd><dt>Esc</dt><dd>Al grupo de arriba</dd>
+    <dt>Arrastrar en la lista</dt><dd>Dentro o fuera de un grupo</dd></dl>
   <h4>Capas</h4><dl><dt>⇧⌘L</dt><dd>Bloquear (no se elige en el lienzo)</dd><dt>⇧⌘H</dt><dd>Mostrar u ocultar</dd>
     <dt>⌘R</dt><dd>Renombrar</dd><dt>Tab · ⇧Tab</dt><dd>La capa de encima · la de debajo</dd></dl>
   <h4>Nodos</h4><dl><dt>Doble clic en el borde</dt><dd>Añadir un nodo</dd><dt>Doble clic en un nodo</dt><dd>Esquina ↔ curva</dd>
@@ -303,10 +308,44 @@ function nodosMundo(c) {
   return c.anillos.map((r) => r.map((n) => ({ p: aMundo(c.t, n.p), ent: L(n.ent), sal: L(n.sal) })));
 }
 const capasMundo = () => doc.capas.filter((c) => c.visible).map(capaMundo);
-const capaMundo = (c) => ({ id: c.id, nombre: c.nombre, op: c.op, anillos: nodosMundo(c), ...(c.trazo ? { trazo: c.trazo } : {}), ...(c.abierto ? { abierto: true } : {}) });
-// selección: ids de capas; nodos, asas propias y el panel de capa, solo con una
+const capaMundo = (c) => ({ id: c.id, nombre: c.nombre, op: c.op, anillos: nodosMundo(c), ...(c.trazo ? { trazo: c.trazo } : {}),
+  ...(c.abierto ? { abierto: true } : {}), ...(c.grupo ? { grupo: c.grupo } : {}) });
+// Grupos (G5): doc.capas sigue siendo la pila de capas (hojas) en orden de pintado y
+// doc.grupos los grupos; capas y grupos dicen su padre en «grupo». Los miembros de un grupo
+// van seguidos en la pila (normalizar()). Un grupo no tiene transformación propia: moverlo
+// o girarlo mueve o gira sus capas; su ojo y su candado actúan sobre ellas.
+const grupoDe = (id) => (id == null ? null : doc?.grupos?.find((g) => g.id === id) ?? null);
+function ancestros(x) { const out = []; for (let g = grupoDe(x.grupo); g; g = grupoDe(g.grupo)) out.push(g); return out; }
+const dentroDe = (x, id) => ancestros(x).some((g) => g.id === id);
+const hojas = (id) => doc.capas.filter((c) => dentroDe(c, id));
+const itemDe = (id) => doc.capas.find((c) => c.id === id) ?? grupoDe(id);
+// selección: ids de capas o de grupos; nodos, asas propias y el panel de capa, solo con una capa
 const capaSel = () => (selec.length === 1 && doc?.capas.find((c) => c.id === selec[0])) || null;
-const capasSel = () => doc?.capas.filter((c) => selec.includes(c.id)) ?? [];
+const grupoSel = () => (selec.length === 1 && grupoDe(selec[0])) || null;
+const capasSel = () => doc?.capas.filter((c) => selec.includes(c.id) || ancestros(c).some((g) => selec.includes(g.id))) ?? [];
+const varias = () => selec.length > 1 || !!grupoSel();  // caja común, alinear, distribuir…
+// lo que se elige al pulsar una capa en el lienzo: el grupo de más arriba, salvo dentro de un
+// grupo en el que se ha entrado (doble clic): entonces el hijo de ese grupo; con ⌘, la capa
+let entrado = null;
+function elegible(c, profundo) {
+  if (profundo) return c.id;
+  const cadena = [...ancestros(c).reverse(), c];  // de la raíz a la capa
+  const k = entrado == null ? -1 : cadena.findIndex((x) => x.id === entrado);
+  return cadena[k + 1].id;
+}
+// los miembros de cada grupo, seguidos en la pila y en el orden de su hoja más baja (el
+// mismo que usa el servidor, arbol()); los grupos vacíos se van
+function normalizar() {
+  if (!doc.grupos) return;
+  const pos = new Map(doc.capas.map((c, i) => [c.id, i])), hijos = new Map();
+  for (const x of [...doc.capas, ...doc.grupos]) { const k = x.grupo ?? null; if (!hijos.has(k)) hijos.set(k, []); hijos.get(k).push(x); }
+  const bajo = (x) => (pos.has(x.id) ? pos.get(x.id) : Math.min(Infinity, ...(hijos.get(x.id) ?? []).map(bajo)));
+  const out = [], visitar = (k) => { for (const x of (hijos.get(k) ?? []).toSorted((a, b) => bajo(a) - bajo(b))) pos.has(x.id) ? out.push(x) : visitar(x.id); };
+  visitar(null);
+  doc.capas = out;
+  doc.grupos = doc.grupos.filter((g) => hojas(g.id).length);
+  if (!doc.grupos.length) delete doc.grupos;
+}
 
 function distSeg(p, a, b) {
   const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy;
@@ -516,13 +555,13 @@ function sobre() {
     }
   }
   // varias: el contorno de cada una (se reconstruye solo si cambia qué capas o sus nodos)
-  const cs = selec.length > 1 && !flota ? capasSel().filter((k) => k.visible) : [], g = $('#contornos');
+  const cs = varias() && !flota ? capasSel().filter((k) => k.visible) : [], g = $('#contornos');
   if (cs.length !== contornosPrev.length || cs.some((k, i) => k.anillos !== contornosPrev[i])) {
     g.innerHTML = cs.map((k) => `<path class="contorno" d="${dCapa(k)}"/>`).join('');
     contornosPrev = cs.map((k) => k.anillos);
   }
   cs.forEach((k, i) => g.children[i].setAttribute('transform', `matrix(${matDe(k).join(' ')})`));
-  const A = arrastre?.G && selec.length > 1 ? arrastre : null, B = A ? A.cajaR : selec.length > 1 && cajaGrupo(capasSel());
+  const A = arrastre?.G && varias() ? arrastre : null, B = A ? A.cajaR : varias() && cajaGrupo(capasSel());
   if (B && B[0] <= B[2] && !nodos) {
     // la caja común; durante un arrastre, la del principio llevada por G (gira con la selección)
     const G = A?.G ?? [1, 0, 0, 1, 0, 0], q = esquinas(B).map((p) => aPantalla(aplicar(G, p)));
@@ -624,7 +663,10 @@ function medir(e) {
         if (!mejor || d < mejor.d) mejor = { d, b: [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])] };
       }
       if (mejor && mejor.d > 1e-12) medida = [{ a: q, b: mejor.b, d: mejor.d }];
-    } else medida = medirCajas(cajaGrupo(capasSel()), otra ? cajaReal(otra) : [-0.5, -0.5, 0.5, 0.5]);
+    } else {
+      const u = otra && elegible(otra), T = !otra ? [-0.5, -0.5, 0.5, 0.5] : grupoDe(u) ? cajaGrupo(hojas(u)) : cajaReal(otra);
+      medida = medirCajas(cajaGrupo(capasSel()), T);
+    }
   }
   if (medida.length || antes) sobre();
 }
@@ -698,7 +740,8 @@ function evaluar(texto, actual) {
 function cambioGeo() {
   peticion++;  // invalida la respuesta que esté en camino
   if (exacta) { exacta = false; lienzo.classList.add('provisional'); $('.exacto').setAttribute('d', ''); }
-  $('#etiqueta2d').textContent = `Vista provisional${doc.capas.some((c) => c.visible && (c.op === 'excluir' || c.op === 'intersecar' && c.trazo)) ? ' (sin «excluir»)' : ''} · calculando la exacta…`;
+  const sinGrupos = doc.grupos?.some((g) => g.booleana || g.op !== 'unir' || hojas(g.id).some((c) => c.op !== 'unir'));
+  $('#etiqueta2d').textContent = `Vista provisional${doc.capas.some((c) => c.visible && (c.op === 'excluir' || c.op === 'intersecar' && c.trazo)) ? ' (sin «excluir»)' : ''}${sinGrupos ? ' (sin las operaciones de los grupos)' : ''} · calculando la exacta…`;
   provisional3D();
   clearTimeout(espera);
   espera = setTimeout(pedirExacta, 400);
@@ -707,7 +750,7 @@ async function pedirExacta() {
   if (arrastre) { espera = setTimeout(pedirExacta, 400); return; }
   const id = peticion;
   let r;
-  try { r = await api('/api/combinar', { capas: capasMundo(), bisel: doc.ajustes.bisel, simetria: doc.simetria }); }
+  try { r = await api('/api/combinar', { capas: capasMundo(), bisel: doc.ajustes.bisel, simetria: doc.simetria, grupos: doc.grupos }); }
   catch { r = { error: 'sin respuesta del servidor' }; }
   if (id !== peticion) return;
   if (r.error) { $('#etiqueta2d').textContent = `Vista provisional · la exacta falló: ${r.error}`; return; }
@@ -724,13 +767,25 @@ async function pedirExacta() {
 // ---------- paneles
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const OPS = { unir: ['＋', 'Une'], restar: ['−', 'Resta lo de debajo'], intersecar: ['∩', 'Se queda con lo de debajo que cae dentro'], excluir: ['⊕', 'Excluye: lo que está en una sola'] };
-function capasUI() {
-  $('#capas').innerHTML = [...doc.capas].reverse().map((c) => `
-    <li data-id="${c.id}" class="${selec.includes(c.id) ? 'sel' : ''} ${c.visible ? '' : 'oculta'} ${c.bloqueada ? 'bloqueada' : ''}">
-      <button class="ojo" data-accion="ojo" title="Mostrar u ocultar">${c.visible ? '◉' : '○'}</button>
-      <span class="op" title="${OPS[c.op][1]}">${OPS[c.op][0]}</span>
-      <span class="nom">${esc(c.nombre)}</span>
-      <button class="candado" data-accion="candado" title="Bloquear (⇧⌘L)">${c.bloqueada ? '🔒' : '🔓'}</button></li>`).join('');
+function capasUI() {  // en árbol: los grupos con sangría, de arriba abajo
+  const pos = new Map(doc.capas.map((c, i) => [c.id, i])), hijos = new Map();
+  for (const x of [...doc.capas, ...(doc.grupos ?? [])]) { const k = x.grupo ?? null; if (!hijos.has(k)) hijos.set(k, []); hijos.get(k).push(x); }
+  const bajo = (x) => (pos.has(x.id) ? pos.get(x.id) : Math.min(Infinity, ...(hijos.get(x.id) ?? []).map(bajo)));
+  let html = '';
+  const fila = (x, prof) => {
+    const g = !pos.has(x.id), hs = g ? hojas(x.id) : [x];
+    const visible = hs.some((c) => c.visible), bloq = hs.length > 0 && hs.every((c) => c.bloqueada);
+    html += `<li data-id="${x.id}" class="${selec.includes(x.id) ? 'sel' : ''} ${visible ? '' : 'oculta'} ${bloq ? 'bloqueada' : ''} ${g ? 'grupo' : ''}" style="padding-left:${6 + prof * 14}px">
+      ${g ? `<button class="pliegue" data-accion="pliegue" title="Plegar o desplegar">${x.abierto === false ? '▸' : '▾'}</button>` : ''}
+      <button class="ojo" data-accion="ojo" title="Mostrar u ocultar">${visible ? '◉' : '○'}</button>
+      <span class="op" title="${OPS[x.op ?? 'unir'][1]}">${OPS[x.op ?? 'unir'][0]}</span>
+      <span class="nom">${g ? (x.booleana ? `<b title="Grupo booleano: ${OPS[x.booleana][1]}">${OPS[x.booleana][0]}</b> ` : '▣ ') : ''}${esc(x.nombre)}</span>
+      <button class="candado" data-accion="candado" title="Bloquear (⇧⌘L)">${bloq ? '🔒' : '🔓'}</button></li>`;
+    if (g && x.abierto !== false) visitar(x.id, prof + 1);
+  };
+  const visitar = (k, prof) => { for (const x of (hijos.get(k) ?? []).toSorted((a, b) => bajo(b) - bajo(a))) fila(x, prof); };
+  visitar(null, 0);
+  $('#capas').innerHTML = html;
 }
 const num = (v, d = 3) => Number(v.toFixed(d));
 const tipoSimetria = () => { const S = doc.simetria; return S?.lr && S?.ab ? 'doble' : S?.lr ? 'lr' : S?.ab ? 'ab' : ''; };
@@ -764,8 +819,15 @@ function panel() {
     html += panelTrazo([c]);
     if (nodos) html += `<p class="nota">Arrastra un nodo o sus tiradores (⌥ los separa) · doble clic en un nodo: esquina ↔ curva ·
       doble clic en el borde añade uno · Supr lo borra · flechas lo empujan.</p>`;
-  } else if (selec.length > 1) {
-    const B = cajaGrupo(capasSel()), n = selec.length, ok = B[0] <= B[2];
+  } else if (varias()) {
+    const g = grupoSel();
+    if (g) html += `<h3>Grupo</h3><div class="rejilla">
+      <label class="ancho">Nombre<input data-gr="nombre" value="${esc(g.nombre)}"></label>
+      <label class="ancho">Operación (con lo de debajo)<select data-gr="op">${Object.keys(OPS).map((o) => `<option value="${o}" ${g.op === o ? 'selected' : ''}>${OPS[o][0]} ${OPS[o][1]}</option>`).join('')}</select></label>
+      <label class="ancho">Booleana (entre sus capas)<select data-gr="booleana"><option value="">Ninguna: grupo normal</option>
+        ${Object.keys(OPS).map((o) => `<option value="${o}" ${g.booleana === o ? 'selected' : ''}>${OPS[o][0]} ${{ unir: 'Unir', restar: 'Restar a la de abajo', intersecar: 'Intersecar', excluir: 'Excluir' }[o]}</option>`).join('')}</select></label></div>
+      <div class="fila"><button data-gr-accion="desagrupar" title="⇧⌘G">Desagrupar</button><button data-aplanar="1" title="⌘E">Aplanar</button></div>`;
+    const B = cajaGrupo(capasSel()), n = g ? hojas(g.id).length : selec.length, ok = B[0] <= B[2];
     const bot = (k, txt, t) => `<button data-alinear="${k}" title="${t}">${txt}</button>`;
     html += `<h3>Selección · ${n} capas</h3><div class="rejilla">
       <label>X centro<input type="text" inputmode="decimal" step="0.005" data-q="x" value="${ok ? num((B[0] + B[2]) / 2) : ''}"></label>
@@ -804,7 +866,12 @@ function panel() {
 $('#props').addEventListener('change', (e) => {
   const el = e.target, c = capaSel();
   if (el.id === 'dDesplazar') return;
-  if (el.dataset.tr) {  // el trazo de la capa elegida
+  if (el.dataset.gr) {  // el grupo elegido
+    const g = grupoSel(), k = el.dataset.gr;
+    if (k === 'nombre') g.nombre = el.value.trim() || g.nombre;
+    else if (k === 'op') g.op = el.value;
+    else if (el.value) g.booleana = el.value; else delete g.booleana;
+  } else if (el.dataset.tr) {  // el trazo de la capa elegida
     const v = el.dataset.tr === 'ancho' ? evaluar(el.value, trazoDe(c).ancho) : el.value;
     if (el.dataset.tr === 'ancho' && !(v > 0)) return;
     c.trazo = { ...c.trazo, [el.dataset.tr]: v };
@@ -847,6 +914,7 @@ $('#props').addEventListener('click', (e) => {
   if (e.target.dataset.distribuir) distribuir(Number(e.target.dataset.distribuir));
   if (e.target.id === 'bCosturas') { delete capaSel().costuras; commit(); }
   if (e.target.dataset.booleana) booleanaSel(e.target.dataset.booleana);
+  if (e.target.dataset.grAccion === 'desagrupar') desagrupar();
   if (e.target.dataset.aplanar) aplanarSel();
   const a = e.target.dataset.trAccion, cs = capasSel();
   if (a === 'contornear') contornear(cs);
@@ -862,7 +930,7 @@ $('#props').addEventListener('click', (e) => {
 let arrastreLista = null, trasArrastre = false;
 $('#capas').addEventListener('pointerdown', (e) => {
   const li = e.target.closest('li');
-  if (!li || e.button !== 0 || e.target.closest('.ojo, .candado, input')) return;
+  if (!li || e.button !== 0 || e.target.closest('.ojo, .candado, .pliegue, input')) return;
   trasArrastre = false;
   arrastreLista = { id: Number(li.dataset.id), y: e.clientY, activo: false, destino: null };
 });
@@ -885,20 +953,34 @@ addEventListener('pointerup', () => {
   else capasUI();
   trasArrastre = true;  // el clic de este mismo gesto no cambia la selección
 });
+// Soltar en la lista: junto a una capa, en su mismo grupo; sobre la mitad de arriba de un
+// grupo, encima de él; sobre la de abajo de un grupo desplegado, dentro, arriba del todo.
+// Un grupo no se mete en sí mismo.
 function reordenar(ids, destino, antes) {
-  if (ids.includes(destino)) return capasUI();
-  const mueven = doc.capas.filter((c) => ids.includes(c.id)), resto = doc.capas.filter((c) => !ids.includes(c.id));
-  const j = resto.findIndex((c) => c.id === destino);
-  resto.splice(antes ? j + 1 : j, 0, ...mueven);  // «antes» en la lista = encima = después en doc.capas
-  doc.capas = resto; commit();
+  const dest = itemDe(destino);
+  if (!dest || ids.includes(destino) || ids.some((id) => grupoDe(id) && dentroDe(dest, id))) return capasUI();
+  const mueven = doc.capas.filter((c) => ids.includes(c.id) || ids.some((id) => dentroDe(c, id)));
+  const quedan = (id) => hojas(id).filter((c) => !mueven.includes(c));  // las del grupo destino que no se mueven
+  let padre, ancla, encima;  // ancla: la capa junto a la que van; encima: detrás de ella en doc.capas
+  if (grupoDe(destino) && !antes && dest.abierto !== false) { padre = dest.id; ancla = quedan(dest.id).at(-1); encima = true; }
+  else if (grupoDe(destino)) { padre = dest.grupo ?? null; ancla = antes ? quedan(dest.id).at(-1) : quedan(dest.id)[0]; encima = antes; }
+  else { padre = dest.grupo ?? null; ancla = dest; encima = antes; }
+  if (!ancla || mueven.includes(ancla)) return capasUI();
+  const resto = doc.capas.filter((c) => !mueven.includes(c)), j = resto.indexOf(ancla);
+  resto.splice(encima ? j + 1 : j, 0, ...mueven);
+  doc.capas = resto;
+  for (const id of ids) { const x = itemDe(id); if (padre == null) delete x.grupo; else x.grupo = padre; }
+  commit();
 }
 $('#capas').addEventListener('click', (e) => {
   const li = e.target.closest('li');
   if (trasArrastre) { trasArrastre = false; return; }
   if (!li) return;
-  const c = doc.capas.find((x) => x.id === Number(li.dataset.id));
-  if (e.target.dataset.accion === 'ojo') { c.visible = !c.visible; commit(); return; }
-  if (e.target.dataset.accion === 'candado') { bloquear([c]); return; }
+  const c = itemDe(Number(li.dataset.id)), hs = grupoDe(c.id) ? hojas(c.id) : [c];
+  if (e.target.dataset.accion === 'ojo') { const ver = !hs.some((k) => k.visible); for (const k of hs) k.visible = ver; commit(); return; }
+  if (e.target.dataset.accion === 'candado') { bloquear(hs); return; }
+  if (e.target.dataset.accion === 'pliegue') { if (c.abierto === false) delete c.abierto; else c.abierto = false; commit(); return; }
+  entrado = c.grupo ?? null;  // elegir en la lista sitúa dentro de su grupo
   if (e.shiftKey) selec = selec.includes(c.id) ? selec.filter((id) => id !== c.id) : [...selec, c.id];  // ⇧ suma o quita
   else if (selec.length !== 1 || selec[0] !== c.id) selec = [c.id];
   nodos = false; nodoSel = null;
@@ -906,7 +988,7 @@ $('#capas').addEventListener('click', (e) => {
 });
 $('#capas').addEventListener('dblclick', (e) => { if (e.target.closest('.nom')) renombrar(); });
 function renombrar() {
-  const c = capaSel(), nom = c && $(`#capas li[data-id="${c.id}"] .nom`);
+  const c = capaSel() ?? grupoSel(), nom = c && $(`#capas li[data-id="${c.id}"] .nom`);
   if (!nom) return;  // con varias elegidas no hay una que renombrar
   nom.innerHTML = `<input value="${esc(c.nombre)}">`;
   const inp = nom.firstChild; inp.focus(); inp.select();
@@ -917,6 +999,7 @@ function renombrar() {
 
 // ---------- historia
 function commit() {
+  normalizar();
   const s = JSON.stringify(doc);
   if (historia[puntero] !== s) {
     historia = historia.slice(0, puntero + 1); historia.push(s);
@@ -992,10 +1075,10 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   const doble = id && id === ultimoClic.id && e.timeStamp - ultimoClic.t < 350;
   ultimoClic = { t: e.timeStamp, id };
   const grupo = () => { const cs = capasSel(); return { capas: cs, t0: new Map(cs.map((k) => [k.id, { ...k.t }])), cajaR: cajaGrupo(cs) }; };
-  if (selec.length > 1 && el.dataset.asa === 'rot') {
+  if (varias() && el.dataset.asa === 'rot') {
     const g = grupo(), C = [(g.cajaR[0] + g.cajaR[2]) / 2, (g.cajaR[1] + g.cajaR[3]) / 2];
     arrastre = { tipo: 'grot', ...g, C, a0: Math.atan2(m[1] - C[1], m[0] - C[0]) };
-  } else if (selec.length > 1 && el.dataset.asa) {
+  } else if (varias() && el.dataset.asa) {
     const g = grupo(), q = esquinas(g.cajaR), k = Number(el.dataset.asa);
     arrastre = { tipo: 'gescala', ...g, q: q[k], O: q[(k + 2) % 4] };
   } else if (el.dataset.asa === 'rot') {
@@ -1016,17 +1099,23 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   } else if (id && nodos && id === unica) {
     if (doble) insertarNodo(m);
   } else if (id) {
+    // con grupos: se elige el de más arriba (o el hijo del grupo en el que se entró); un
+    // doble clic sobre un grupo elegido entra en él; ⌘ + clic elige la capa misma
+    const capa = doc.capas.find((k) => k.id === id);
+    if (entrado != null && !dentroDe(capa, entrado)) entrado = null;
+    let sid = elegible(capa, e.metaKey), entra = false;
+    if (doble && grupoSel() && dentroDe(capa, selec[0]) && !e.shiftKey) { entrado = selec[0]; sid = elegible(capa); entra = true; }
     // el doble clic que abre los nodos se decide al soltar: si la segunda pulsación
     // arrastra, es un movimiento (como el dblclick del navegador)
-    const abreNodos = doble && id === unica && !e.shiftKey;
+    const abreNodos = doble && sid === unica && !e.shiftKey && !entra;
     // como Figma: ⇧ + clic suma o quita; pulsar una de varias las arrastra todas, y soltar
     // sin arrastrar deja solo esa (o, con ⇧, la quita)
     let alSoltar = null;
-    if (e.shiftKey && selec.includes(id)) alSoltar = selec.filter((x) => x !== id);
-    else if (e.shiftKey) selec = [...selec, id];
-    else if (selec.includes(id) && selec.length > 1) alSoltar = [id];
-    else selec = [id];
-    if (id !== unica) { nodos = false; nodoSel = null; }
+    if (e.shiftKey && selec.includes(sid)) alSoltar = selec.filter((x) => x !== sid);
+    else if (e.shiftKey) selec = [...selec, sid];
+    else if (selec.includes(sid) && selec.length > 1) alSoltar = [sid];
+    else selec = [sid];
+    if (sid !== unica) { nodos = false; nodoSel = null; }
     arrastre = { tipo: 'mover', m0: m, ...grupo(), abreNodos, alSoltar, alt: e.altKey };
   } else {  // en vacío: recuadro de selección (con ⇧, suma a la que hay)
     const base = e.shiftKey ? [...selec] : [];
@@ -1072,7 +1161,8 @@ addEventListener('pointermove', (e) => {
     A.b = m; A.movido ||= Math.hypot(e.clientX - A.x, e.clientY - A.y) > 3;
     if (!A.movido) return;
     const R = [Math.min(A.a[0], m[0]), Math.min(A.a[1], m[1]), Math.max(A.a[0], m[0]), Math.max(A.a[1], m[1])];
-    const tocadas = A.mundo.filter(({ b, W }) => b[0] <= R[2] && b[2] >= R[0] && b[1] <= R[3] && b[3] >= R[1] && toca(W, R)).map((k) => k.id);
+    const tocadas = [...new Set(A.mundo.filter(({ b, W }) => b[0] <= R[2] && b[2] >= R[0] && b[1] <= R[3] && b[3] >= R[1] && toca(W, R))
+      .map((k) => elegible(doc.capas.find((c) => c.id === k.id))))];
     const nueva = [...A.base, ...tocadas.filter((id) => !A.base.includes(id))];
     if (nueva.join() !== selec.join()) { selec = nueva; capasUI(); pedirPanel(); }
     sobre(); return;
@@ -1083,7 +1173,7 @@ addEventListener('pointermove', (e) => {
     A.duplicado = true;
     const copias = copiarCapas(A.capas, 0, 0);
     ultimaCopia = { ids: copias.map((k) => k.id), origen: new Map(copias.map((k, i) => [k.id, [A.capas[i].t.x, A.capas[i].t.y]])) };
-    A.capas = copias; A.t0 = new Map(copias.map((k) => [k.id, { ...k.t }])); selec = ultimaCopia.ids; A.alSoltar = null;
+    A.capas = copias; A.t0 = new Map(copias.map((k) => [k.id, { ...k.t }])); selec = copias.sel; A.alSoltar = null;
   }
   if (A.tipo === 'mover') {
     let dx = m[0] - A.m0[0], dy = m[1] - A.m0[1];
@@ -1312,24 +1402,30 @@ function escalarGrupo(capas, O, kx, ky) {
   for (const c of capas) { transformarCapa(c, { ...c.t }, G, kx === ky ? { th: 0, k: kx } : null); hornear(c); }
 }
 // alinear y distribuir con la caja real de cada capa, dentro de la caja de la selección
+// alinear y distribuir mueven unidades: una capa, o un grupo entero con su caja
+function unidades() {
+  return (selec.length === 1 && grupoDe(selec[0]) ? hojas(selec[0]).map((c) => c.id) : selec)
+    .map((id) => { const cs = grupoDe(id) ? hojas(id) : doc.capas.filter((c) => c.id === id); return { cs: cs.filter((c) => c.visible) }; })
+    .filter((u) => u.cs.length).map((u) => ({ ...u, b: cajaGrupo(u.cs) }));
+}
+const desplazarUnidad = (u, eje, d) => { for (const c of u.cs) c.t[eje ? 'y' : 'x'] += d; };
 function alinear(como) {
-  const cs = capasSel().filter((c) => c.visible), cajas = cs.map(cajaReal), B = unirCajas(cajas);
+  const us = unidades(), B = unirCajas(us.map((u) => u.b));
   const eje = 'izq centro der'.includes(como) ? 0 : 1;
   const destino = { izq: B[0], der: B[2], abajo: B[1], arriba: B[3], centro: (B[0] + B[2]) / 2, medio: (B[1] + B[3]) / 2 }[como];
-  cs.forEach((c, i) => {
-    const b = cajas[i], mio = como === 'izq' ? b[0] : como === 'der' ? b[2] : como === 'abajo' ? b[1] : como === 'arriba' ? b[3] : (b[eje] + b[eje + 2]) / 2;
-    c.t[eje ? 'y' : 'x'] += destino - mio;
-  });
+  for (const u of us) {
+    const b = u.b, mio = como === 'izq' ? b[0] : como === 'der' ? b[2] : como === 'abajo' ? b[1] : como === 'arriba' ? b[3] : (b[eje] + b[eje + 2]) / 2;
+    desplazarUnidad(u, eje, destino - mio);
+  }
   commit();
 }
 function distribuir(eje) {  // mismo hueco entre cajas vecinas, de la primera a la última
-  const cs = capasSel().filter((c) => c.visible);
-  if (cs.length < 3) return;
-  const orden = cs.map((c) => ({ c, b: cajaReal(c) })).sort((p, q) => (p.b[eje] + p.b[eje + 2]) - (q.b[eje] + q.b[eje + 2]));
+  const orden = unidades().sort((p, q) => (p.b[eje] + p.b[eje + 2]) - (q.b[eje] + q.b[eje + 2]));
+  if (orden.length < 3) return;
   const B = unirCajas(orden.map((o) => o.b)), lleno = orden.reduce((s, o) => s + o.b[eje + 2] - o.b[eje], 0);
   const hueco = (B[eje + 2] - B[eje] - lleno) / (orden.length - 1);
   let pos = B[eje];
-  for (const { c, b } of orden) { c.t[eje ? 'y' : 'x'] += pos - b[eje]; pos += b[eje + 2] - b[eje] + hueco; }
+  for (const u of orden) { desplazarUnidad(u, eje, pos - u.b[eje]); pos += u.b[eje + 2] - u.b[eje] + hueco; }
   commit();
 }
 // el recuadro selecciona lo que toca (como Figma): un borde que entra en él, o el recuadro
@@ -1426,7 +1522,13 @@ addEventListener('keydown', (e) => {
   if (mod && k === 'z') { e.preventDefault(); irA(puntero + (e.shiftKey ? 1 : -1)); return; }
   if (mod && k === 'd') { e.preventDefault(); duplicar(); return; }
   if (mod && k === 's') { e.preventDefault(); guardar(); return; }
-  if (mod && k === 'a') { e.preventDefault(); selec = doc.capas.filter((x) => x.visible && !x.bloqueada).map((x) => x.id); nodos = false; nodoSel = null; todo(); return; }
+  if (mod && k === 'a') {
+    e.preventDefault();
+    selec = [...new Set(doc.capas.filter((x) => x.visible && !x.bloqueada && (entrado == null || dentroDe(x, entrado))).map((x) => elegible(x)))];
+    nodos = false; nodoSel = null; todo(); return;
+  }
+  if (mod && !e.shiftKey && k === 'g') { e.preventDefault(); agrupar(); return; }
+  if (mod && e.shiftKey && k === 'g') { e.preventDefault(); desagrupar(); return; }
   if (mod && k === 'v') { pegarEnSitio = e.shiftKey; return; }  // el evento paste llega después
   if (mod && e.shiftKey && k === 'l') { e.preventDefault(); bloquear(capasSel()); return; }
   if (mod && e.shiftKey && k === 'h') { e.preventDefault(); const cs = capasSel(), ver = !cs.every((x) => x.visible); for (const x of cs) x.visible = ver; commit(); return; }
@@ -1457,7 +1559,13 @@ addEventListener('keydown', (e) => {
   else if (e.key === 'Escape' && pluma) { pluma = null; marcaIman = null; sobre(); }  // otra vez Esc, a Mover
   else if (e.key === 'Enter' && c) { nodos = !nodos; nodoSel = null; todo(); }
   else if (e.key === 'Escape' && cuchilla) { cuchilla = null; sobre(); }  // cancela la línea; otra vez Esc, a Mover
-  else if (e.key === 'Escape') { if (nodos) nodos = false; else selec = []; nodoSel = null; herramienta = 'mover'; todo(); }
+  else if (e.key === 'Escape') {  // salir de nodos; si no, al grupo de arriba; si no, soltar
+    const x = selec.length === 1 && itemDe(selec[0]);
+    if (nodos) nodos = false;
+    else if (x?.grupo != null) { selec = [x.grupo]; entrado = grupoDe(x.grupo)?.grupo ?? null; }
+    else { selec = []; entrado = null; }
+    nodoSel = null; herramienta = 'mover'; todo();
+  }
   else if ((e.key === 'Delete' || e.key === 'Backspace') && selec.length) { e.preventDefault(); nodos && nodoSel ? borrarNodo() : borrarCapa(); }
   else if (e.key.startsWith('Arrow') && selec.length) {
     e.preventDefault();
@@ -1629,7 +1737,7 @@ async function terminarCorte() {
       const anillos = poli.map((a) => aNodos(a).map((n) => ({ ...n, p: [n.p[0] - cx, n.p[1] - cy] })));
       const sufijo = k < 26 ? String.fromCharCode(97 + k) : String(k + 1);
       return { id: idSig++, nombre: `${c.nombre} · ${sufijo}`, op: c.op, visible: true, anillos, t: { x: cx, y: cy, r: 0, sx: 1, sy: 1 },
-        ...(c.trazo ? { trazo: { ...c.trazo } } : {}), ...(abiertos?.[k] ? { abierto: true } : {}) };
+        ...(c.trazo ? { trazo: { ...c.trazo } } : {}), ...(abiertos?.[k] ? { abierto: true } : {}), ...(c.grupo ? { grupo: c.grupo } : {}) };
     });
     doc.capas.splice(i, 1, ...nuevas);
     piezas += nuevas.length; primera ??= nuevas[0].id;
@@ -1642,14 +1750,25 @@ async function terminarCorte() {
 // nueva copia repite ese mismo desplazamiento (filas equiespaciadas). ultimaCopia recuerda
 // las copias y dónde estaban sus originales; ⌥ + arrastrar también la deja.
 let ultimaCopia = null;
+// con grupos elegidos, se copian también (con ids nuevos) y las copias van en ellos;
+// copias.sel es la selección equivalente (los grupos nuevos y las capas sueltas nuevas)
 function copiarCapas(cs, dx, dy) {
-  return cs.map((c) => {
+  const mapa = new Map();
+  for (const g of doc.grupos ?? []) if (selec.includes(g.id) || ancestros(g).some((a) => selec.includes(a.id))) mapa.set(g.id, idSig++);
+  for (const [v, n] of mapa) {
+    const g = grupoDe(v);
+    doc.grupos.push({ ...g, id: n, nombre: mapa.has(g.grupo) ? g.nombre : g.nombre + ' copia', ...(mapa.has(g.grupo) ? { grupo: mapa.get(g.grupo) } : {}) });
+  }
+  const copias = cs.map((c) => {
     const copia = JSON.parse(JSON.stringify(c));
-    Object.assign(copia, { id: idSig++, nombre: c.nombre + ' copia' });
+    Object.assign(copia, { id: idSig++, nombre: mapa.has(c.grupo) ? c.nombre : c.nombre + ' copia' });
+    if (mapa.has(c.grupo)) copia.grupo = mapa.get(c.grupo);
     copia.t.x += dx; copia.t.y += dy;
     doc.capas.splice(doc.capas.indexOf(c) + 1, 0, copia);
     return copia;
   });
+  copias.sel = selec.map((id) => mapa.get(id) ?? copias[cs.findIndex((c) => c.id === id)]?.id).filter((x) => x != null);
+  return copias;
 }
 function duplicar() {
   const cs = capasSel(); if (!cs.length) return;
@@ -1657,7 +1776,7 @@ function duplicar() {
   const [dx, dy] = repite ? [cs[0].t.x - U.origen.get(cs[0].id)[0], cs[0].t.y - U.origen.get(cs[0].id)[1]] : [0.02, -0.02];
   const copias = copiarCapas(cs, dx, dy);
   ultimaCopia = { ids: copias.map((k) => k.id), origen: new Map(copias.map((k, i) => [k.id, [cs[i].t.x, cs[i].t.y]])) };
-  selec = ultimaCopia.ids;
+  selec = copias.sel;
   commit();
 }
 // ⇧H / ⇧V: voltear la selección respecto al centro de su caja. Sin hornear: el reflejo de
@@ -1686,7 +1805,7 @@ function hermana(d) {  // Tab / ⇧Tab: la capa de encima / debajo de la elegida
   const i = capaSel() ? doc.capas.indexOf(capaSel()) : d > 0 ? -1 : n;
   selec = [doc.capas[(i + d + n) % n].id]; nodos = false; nodoSel = null; todo();
 }
-function borrarCapa() { doc.capas = doc.capas.filter((c) => !selec.includes(c.id)); selec = []; nodos = false; commit(); }
+function borrarCapa() { const cs = capasSel(); doc.capas = doc.capas.filter((c) => !cs.includes(c)); selec = []; nodos = false; commit(); }
 function moverCapa(d) {
   const c = capaSel(); if (!c) return;
   const i = doc.capas.indexOf(c), j = i + d;
@@ -1744,7 +1863,7 @@ async function desplazar(cs, d) {
 }
 async function engrosar() {
   estado('Buscando lo mínimo que hay que engrosar…');
-  const r = await api('/api/engrosar', { capas: capasMundo(), bisel: doc.ajustes.bisel, simetria: doc.simetria });
+  const r = await api('/api/engrosar', { capas: capasMundo(), bisel: doc.ajustes.bisel, simetria: doc.simetria, grupos: doc.grupos });
   if (r.error) return estado(r.error, true);
   aplicarCambios(r.capas); generado = null; commit();
   estado(r.d ? `Engrosadas ${r.capas.length} capa(s) ${num(r.d, 4)} por lado: vuelve a generar` : 'No hacía falta engrosar nada');
@@ -1755,9 +1874,9 @@ async function engrosar() {
 // exacta reajustada a curvas. Los botones booleanos (⌥⇧U, S, I, E) combinan las elegidas
 // entre ellas con esa operación y las aplanan (destructivo, se puede deshacer); en G5 pasan
 // a crear un grupo booleano no destructivo.
-function reemplazar(cs, anillos, nombre) {
+function reemplazar(cs, anillos, nombre, padre = null) {
   const idx = cs.map((c) => doc.capas.indexOf(c)), arriba = Math.max(...idx);
-  const nueva = { id: idSig++, nombre, op: 'unir', visible: true };
+  const nueva = { id: idSig++, nombre, op: 'unir', visible: true, ...(padre != null ? { grupo: padre } : {}) };
   ponerMundo(nueva, anillos);
   const resto = doc.capas.filter((c) => !cs.includes(c));
   resto.splice(arriba - (idx.length - 1), 0, nueva);
@@ -1768,19 +1887,51 @@ async function aplanarSel() {
   if (cs.length < 1) return;
   const idx = cs.map((c) => doc.capas.indexOf(c)).sort((a, b) => a - b);
   if (idx.some((v, i) => i && v !== idx[i - 1] + 1)) return estado('Aplanar: las capas tienen que estar seguidas en la lista (lo de en medio cambiaría)', true);
-  const r = await api('/api/aplanar', { capas: cs.map(capaMundo) });
+  // los grupos elegidos (y los de dentro) van con ellas; lo de fuera de la selección no
+  const ids = new Set((doc.grupos ?? []).filter((g) => selec.includes(g.id) || ancestros(g).some((a) => selec.includes(a.id))).map((g) => g.id));
+  const capas = cs.map((c) => { const m = capaMundo(c); if (!ids.has(m.grupo)) delete m.grupo; return m; });
+  const grupos = (doc.grupos ?? []).filter((g) => ids.has(g.id)).map((g) => (ids.has(g.grupo) ? g : { ...g, grupo: undefined }));
+  const r = await api('/api/aplanar', { capas, grupos });
   if (r.error) return estado(r.error, true);
   const debajo = doc.capas.slice(0, idx[0]).some((c) => c.visible) && cs.some((c) => c.op !== 'unir');
-  reemplazar(cs, r.anillos, cs.length === 1 ? cs[0].nombre : 'Aplanado');
+  const padres = new Set(selec.map((id) => itemDe(id)?.grupo ?? null));
+  reemplazar(cs, r.anillos, cs.length === 1 ? cs[0].nombre : grupoSel()?.nombre ?? 'Aplanado', padres.size === 1 ? [...padres][0] : null);
   commit();
   estado(`Aplanadas ${cs.length} capa(s) en una` + (debajo ? ' · sus restas o intersecciones ya no afectan a lo de debajo' : ''));
 }
-async function booleanaSel(op) {
-  const cs = capasSel().filter((c) => c.visible);
-  if (cs.length < 2) return estado('Las operaciones booleanas necesitan dos capas o más', true);
-  const r = await api('/api/booleana', { capas: cs.map(capaMundo), op });
-  if (r.error) return estado(r.error, true);
-  reemplazar(cs, r.anillos, { unir: 'Unión', restar: 'Resta', intersecar: 'Intersección', excluir: 'Exclusión' }[op]);
+// los botones booleanos crean un grupo booleano, no destructivo (G5): sus capas se siguen
+// pudiendo editar; «Aplanar» lo convierte en una forma
+function booleanaSel(op) {
+  if (selec.length < 2) return estado('Las operaciones booleanas necesitan dos capas o más', true);
+  agrupar(op);
+}
+// ⌘G: las elegidas pasan a un grupo nuevo (booleano con los botones), en el sitio de la
+// más alta; sus capas quedan seguidas en la pila. ⇧⌘G: los hijos suben al padre del grupo.
+function agrupar(booleana) {
+  const items = selec.map(itemDe).filter(Boolean);
+  if (!items.length) return;
+  const padres = new Set(items.map((x) => x.grupo ?? null)), padre = padres.size === 1 ? [...padres][0] : null;
+  const n = (doc.grupos?.length ?? 0) + 1;
+  const g = { id: idSig++, nombre: booleana ? { unir: 'Unión', restar: 'Resta', intersecar: 'Intersección', excluir: 'Exclusión' }[booleana] : `Grupo ${n}`,
+    op: 'unir', ...(booleana ? { booleana } : {}), ...(padre != null ? { grupo: padre } : {}) };
+  const mueven = capasSel(), arriba = Math.max(...mueven.map((c) => doc.capas.indexOf(c)));
+  const resto = doc.capas.filter((c) => !mueven.includes(c));
+  resto.splice(arriba - (mueven.length - 1), 0, ...mueven);
+  doc.capas = resto;
+  for (const x of items) x.grupo = g.id;
+  (doc.grupos ??= []).push(g);
+  selec = [g.id]; entrado = padre; nodos = false; nodoSel = null;
+  commit();
+}
+function desagrupar() {
+  const gs = selec.map(grupoDe).filter(Boolean);
+  if (!gs.length) return;
+  const nuevos = [];
+  for (const g of gs) {
+    for (const x of [...doc.capas, ...doc.grupos]) if (x.grupo === g.id) { if (g.grupo == null) delete x.grupo; else x.grupo = g.grupo; nuevos.push(x.id); }
+    doc.grupos = doc.grupos.filter((k) => k !== g);
+  }
+  selec = nuevos; entrado = gs[0].grupo ?? null;
   commit();
 }
 
@@ -1845,7 +1996,8 @@ document.addEventListener('paste', async (e) => {
   }
   // encima de la capa elegida más alta (o arriba del todo), con ids nuevos
   const arriba = Math.max(-1, ...capasSel().map((c) => doc.capas.indexOf(c)));
-  for (const c of nuevas) { c.id = idSig++; delete c.bloqueada; }
+  const padres = new Set(selec.map((id) => itemDe(id)?.grupo ?? null)), padre = padres.size === 1 ? [...padres][0] : null;
+  for (const c of nuevas) { c.id = idSig++; delete c.bloqueada; if (padre != null && grupoDe(padre)) c.grupo = padre; else delete c.grupo; }
   doc.capas.splice(arriba >= 0 ? arriba + 1 : doc.capas.length, 0, ...nuevas);
   selec = nuevas.map((c) => c.id); nodos = false; nodoSel = null; herramienta = 'mover';
   commit();
@@ -2039,8 +2191,8 @@ let tGuardar = null, nombreGuardado = null;
 // tools/editor.py). Solo capas que unen: una ruta por capa con sus nodos; con restas o
 // simetría, la forma combinada reajustada a curvas, que cualquier programa lee igual.
 async function svgDiseno() {
-  const capas = doc.capas.filter((c) => c.visible).map((c) => ({ nombre: c.nombre, op: c.op, anillos: nodosMundo(c) }));
-  return api('/api/svg', { capas, simetria: doc.simetria, color: doc.ajustes.color });
+  const capas = doc.capas.filter((c) => c.visible).map(capaMundo);
+  return api('/api/svg', { capas, simetria: doc.simetria, color: doc.ajustes.color, grupos: doc.grupos });
 }
 $('#bSvg').addEventListener('click', async () => {
   let r;
@@ -2091,7 +2243,7 @@ function migrar(d) {
   // no por versión: un parche al cerrar la pestaña rellenaba con los puntos del disco las
   // capas sin cambios de un documento recién migrado, y quedaba mezclado
   for (const c of d.capas) c.anillos = c.anillos.map((r) => (Array.isArray(r[0]) ? r.map(nodo) : r));
-  d.version = 2;
+  d.version = 3;  // la 3 admite grupos (G5); sin ellos es la 2 tal cual
   return d;
 }
 const descartar = () => JSON.stringify(doc) === guardado || !doc?.capas.length || confirm('Hay cambios sin guardar. ¿Descartarlos?');
@@ -2106,11 +2258,11 @@ async function abrir(s) {
 }
 // un documento llegado del servidor (abierto, nuevo o importado) pasa a ser el actual
 function cargar(r, s, aviso) {
-  const original = JSON.stringify(r.doc), migrado = r.doc.version !== 2 || r.doc.capas.some((c) => c.anillos.some((a) => Array.isArray(a[0])));
+  const original = JSON.stringify(r.doc), migrado = r.doc.version !== 3 || r.doc.capas.some((c) => c.anillos.some((a) => Array.isArray(a[0])));
   doc = migrar(r.doc); nombre = r.nombre; $('#nombre').value = nombre;
   enServidor = r.nombre === s;  // abierto de editor/<nombre>.json
   nombreGuardado = enServidor ? r.nombre : null;
-  idSig = Math.max(0, ...doc.capas.map((c) => c.id || 0)) + 1;
+  idSig = Math.max(0, ...doc.capas.map((c) => c.id || 0), ...(doc.grupos ?? []).map((g) => g.id)) + 1; entrado = null;
   for (const c of doc.capas) c.id ??= idSig++;
   selec = []; nodos = false; nodoSel = null; herramienta = 'mover';
   vistaInicial();
