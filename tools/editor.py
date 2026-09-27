@@ -14,6 +14,7 @@ import json
 import math
 import re
 import sys
+import tempfile
 import time
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -21,7 +22,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import shapely
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely import affinity
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 from shapely.ops import polygonize, unary_union
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -84,15 +86,38 @@ def forma_capa(anillos):
     return forma
 
 
-def geometria(capas, bisel):
+def geometria(capas, bisel, simetria=None):
     """Capas en coordenadas del mundo, de abajo arriba: unir suma, restar quita lo de debajo."""
     geo = Polygon()
     for c in capas:
         forma = shapely.set_precision(forma_capa(c["anillos"]), PRECISION)
         geo = geo.union(forma) if c["op"] == "unir" else geo.difference(forma)
+    geo = simetrizar(geo, simetria)
     geo = unary_union([p for p in s.lista(geo.buffer(0)) if p.area > 1e-7])
     # mismo acabado en planta que redibujar.py; sobre una forma ya redondeada no cambia nada
     return s.redondear_planta(geo, bisel * s.DIAMETRO * 1.3, bisel * s.DIAMETRO * 0.6)
+
+
+def simetrizar(geo, simetria):
+    """Simetría en vivo: manda una mitad y la otra es su reflejo. simetria = {"lr": bool,
+    "ab": bool, "x": -1 (manda la izquierda) | 1, "y": -1 (manda la de abajo) | 1}; los ejes
+    son x = 0 e y = 0 (los símbolos salen centrados). Como espejo_lr/espejo_ab de
+    redibujar.py: se recorta la mitad que manda y se une con su reflejo. Reflejar el
+    resultado entero no vale: un hueco hecho en la mitad que manda quedaría tapado por la
+    otra, maciza. El recorte deja el borde exactamente en el eje, y su reflejo también
+    (0 y -0 son el mismo número): las dos mitades se funden sin rendija."""
+    if not simetria:
+        return geo
+    G = 10.0  # más grande que cualquier símbolo
+    if simetria.get("lr"):
+        lado = simetria.get("x", -1)
+        mitad = geo.intersection(box(min(0.0, lado * G), -G, max(0.0, lado * G), G))
+        geo = unary_union([mitad, affinity.scale(mitad, -1, 1, origin=(0, 0))])
+    if simetria.get("ab"):
+        lado = simetria.get("y", 1)
+        mitad = geo.intersection(box(-G, min(0.0, lado * G), G, max(0.0, lado * G)))
+        geo = unary_union([mitad, affinity.scale(mitad, 1, -1, origin=(0, 0))])
+    return shapely.set_precision(geo, PRECISION)
 
 
 def cortar(capas, linea):
@@ -186,9 +211,10 @@ def sugerencias(capas, largo_min=0.03, max_corte=0.12, paralelos=0.02):
 
 
 def bordes_rectos(capas, largo_min=0.015):
-    """Bordes rectos de las capas: el imán de la cuchilla engancha a sus extremos, a ellos
-    mismos y a sus prolongaciones (por donde pasa un corte limpio de una unión)."""
-    return [[list(a), list(b)] for c in capas for p in s.lista(forma_capa(c["anillos"]))
+    """Bordes rectos de cada capa, [a, b, id]: el imán engancha a sus extremos, a ellos
+    mismos y a sus prolongaciones (por donde pasa un corte limpio de una unión). Con el id,
+    al mover una capa se ignoran los suyos."""
+    return [[list(a), list(b), c.get("id")] for c in capas for p in s.lista(forma_capa(c["anillos"]))
             for anillo in [p.exterior, *p.interiors] for a, b in tramos_rectos(anillo, largo_min)]
 
 
@@ -264,18 +290,34 @@ def a_listas(geo, decimales=6):
     return [[r(p.exterior), *map(r, p.interiors)] for p in s.lista(geo) if not p.is_empty]
 
 
+def malla(nombre, doc, capas, carpeta):
+    """Capas -> carpeta/glb/<nombre>.glb con el acabado de la galería. La usan «Generar» y
+    la vista 3D del editor (/api/previa): lo que se ve es exactamente lo que se genera."""
+    a = doc["ajustes"]
+    geo = geometria(capas, float(a["bisel"]), doc.get("simetria"))
+    if geo.is_empty:
+        raise ValueError("no queda ninguna forma que generar")
+    for sub in ("glb", "svg"):
+        (Path(carpeta) / sub).mkdir(parents=True, exist_ok=True)
+    return s.exportar(geo, nombre, fondo=float(a["fondo"]), bisel=float(a["bisel"]),
+                      color=[float(v) for v in a["color"]], carpeta=carpeta)
+
+
 def generar(nombre, doc, capas):
     if protegido(nombre):
         raise ValueError(f"glb/{nombre}.glb no salió del editor: elige otro nombre")
-    a = doc["ajustes"]
-    geo = geometria(capas, float(a["bisel"]))
-    if geo.is_empty:
-        raise ValueError("no queda ninguna forma que generar")
     guardar(nombre, doc)
-    for sub in ("glb", "svg"):
-        (SALIDA / sub).mkdir(parents=True, exist_ok=True)
-    return s.exportar(geo, nombre, fondo=float(a["fondo"]), bisel=float(a["bisel"]),
-                      color=[float(v) for v in a["color"]], carpeta=SALIDA)
+    return malla(nombre, doc, capas, SALIDA)
+
+
+def previa(doc, capas):
+    """La malla real para la vista 3D, sin tocar glb/: se exporta a un temporal y se lee.
+    Con el canto de three.js (ExtrudeGeometry) la vista mentía: en las esquinas que entran,
+    redondeadas a 0,6 × canto, hundir el contorno un canto entero lo cruzaba consigo mismo
+    y salían caras torcidas en los huecos que el GLB no tiene."""
+    with tempfile.TemporaryDirectory() as d:
+        malla("previa", doc, capas, d)
+        return (Path(d) / "glb" / "previa.glb").read_bytes()
 
 
 def guardar(nombre, doc):
@@ -354,13 +396,27 @@ class Manejador(SimpleHTTPRequestHandler):
         datos = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         if self.path == "/api/combinar":
             try:
-                geo = geometria(datos["capas"], float(datos["bisel"]))
+                geo = geometria(datos["capas"], float(datos["bisel"]), datos.get("simetria"))
+                bordes = bordes_rectos(datos["capas"])
             except Exception as e:  # geometría imposible a mitad de edición: se dice, no se cae
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
-            return self.responder({"resultado": a_listas(geo)})
+            # los bordes rectos de cada capa van con la geometría exacta: el imán los usa al
+            # mover capas y nodos y en la cuchilla, siempre al día
+            return self.responder({"resultado": a_listas(geo), "bordes": bordes})
+        if self.path == "/api/previa":
+            try:
+                cuerpo = previa(datos["doc"], datos["capas"])
+            except Exception as e:
+                return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
+            self.send_response(200)
+            self.send_header("Content-Type", "model/gltf-binary")
+            self.send_header("Content-Length", str(len(cuerpo)))
+            self.end_headers()
+            self.wfile.write(cuerpo)
+            return
         if self.path == "/api/sugerencias":
             try:
-                return self.responder({"sugerencias": sugerencias(datos["capas"]), "bordes": bordes_rectos(datos["capas"])})
+                return self.responder({"sugerencias": sugerencias(datos["capas"])})
             except Exception as e:
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
         if self.path == "/api/cortar":

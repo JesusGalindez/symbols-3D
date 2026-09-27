@@ -278,6 +278,36 @@ el GLB tiene el hueco en los dos lados y el IoU de su silueta con su reflejo es
 **Tarea de usuario (5 min):** en `xi-doble` con simetría `lr`, abrir un hueco
 redondo en el centro de la mitad izquierda y comprobar que sale igual en la derecha.
 
+**Hecho el 2026-09-26** (falta la tarea de usuario):
+- **Simetría en vivo** (`simetrizar()` en el servidor): izq. ↔ der., arriba ↔ abajo o
+  doble, y qué mitad (o cuarto) manda, desde el panel. Vista provisional: la otra mitad
+  tapada a medias y el reflejo encima; durante un arrastre, el reflejo de la pieza viaja
+  por la tarjeta gráfica (M·D·M). El 3D provisional no la muestra (llega con la exacta).
+- **Imán al mover capas** (guías inteligentes): bordes y centro de la caja contra bordes y
+  centros de las otras capas, esquinas de sus bordes rectos, ejes y círculo; cada eje por
+  su lado, 6 px; Mayús = un solo eje; ⌘ lo apaga. **En los nodos**, el imán de la
+  cuchilla con lo de las demás capas. Los bordes rectos llegan ahora con la geometría
+  exacta (`/api/combinar`), no con las sugerencias: al día también en modo Mover.
+- Sin rejilla espacial: con ~700 objetivos el imán cuesta 0,8 ms por fotograma en
+  shou-circular (presupuesto 16); se añade si hiciera falta.
+- **Fallos encontrados:** (1) una esquina de xi-doble a 5e-6 del eje le ganaba al eje:
+  dos objetivos a menos de medio píxel son el mismo sitio y manda el de más prioridad
+  (eje > círculo > cajas > esquinas); (2) el reflejo provisional se hizo con `<use>` y
+  salía negro: a los clones de un `<use>` no les llegan las reglas CSS; ahora son copias.
+- Criterios: hueco en la mitad que manda → en los dos lados del GLB, silueta simétrica
+  (IoU ≥ 0,999); xi-doble rehecho desde su mitad izquierda sigue APROBADO; soltar a
+  1,5 px del eje deja x = 0 exacto; un nodo engancha exacto a la esquina de otra capa;
+  arrastre de shou-circular con imán: 0,8 ms.
+
+**Corrección tras la prueba del usuario** (capturas con caras torcidas en los huecos): no
+era el GLB (no había generado ninguno), sino la vista 3D, que hacía el canto con el
+bisel de three.js (`ExtrudeGeometry`). En las esquinas que entran, redondeadas a 0,6 ×
+canto, hundir el contorno un canto entero lo cruza consigo mismo. Se adelanta de F5 la
+**vista con la malla real**: `/api/previa` exporta con la misma función que «Generar»
+(`malla()`) a un temporal y la devuelve (0,7–1,9 s medido); mientras llega, extrusión
+provisional **sin** canto. Prueba: la vista 3D y el GLB generado tienen los mismos
+triángulos (xi-doble: 41 088).
+
 ---
 
 ## F3 · Selección múltiple y alineación  (1 sesión)

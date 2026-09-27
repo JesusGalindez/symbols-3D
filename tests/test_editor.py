@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import trimesh
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -319,7 +319,58 @@ def test_bordes_rectos_para_el_iman():
     _, capas = capas_de("shou-cruz")
     bordes = editor.bordes_rectos(capas)
     assert len(bordes) > 100
-    assert [[0.29894, 0.04164], [0.06227, 0.04164]] in [[[round(v, 5) for v in q] for q in b] for b in bordes]
+    assert all(len(b) == 3 and b[2] == 1 for b in bordes)  # [a, b, id de la capa]
+    assert [[0.29894, 0.04164], [0.06227, 0.04164]] in [[[round(v, 5) for v in q] for q in b[:2]] for b in bordes]
     radio = lambda q: math.hypot(*q)
     assert not any(radio(a) > 0.45 and radio(b) > 0.45 and abs(radio(a) - radio(b)) < 1e-3 and math.dist(a, b) > 0.02
-                   for a, b in bordes)  # ninguna «recta» sobre el anillo exterior
+                   for a, b, _ in bordes)  # ninguna «recta» sobre el anillo exterior
+
+
+# ---------- F2: simetría en vivo
+
+def agujero(cx, cy, r=0.02):
+    return [[cx + r * math.cos(k / 24 * 2 * math.pi), cy + r * math.sin(k / 24 * 2 * math.pi)] for k in range(24)]
+
+
+@pytest.mark.parametrize("simetria, izquierda, derecha", [
+    (None, True, False),                    # sin simetría: el hueco solo donde se hizo
+    ({"lr": True, "x": -1}, True, True),    # manda la izquierda: el hueco en los dos lados
+    ({"lr": True, "x": 1}, False, False),   # manda la derecha (sin hueco): desaparece
+])
+def test_simetria_refleja_la_mitad_que_manda(simetria, izquierda, derecha):
+    """No vale resultado ∪ reflejo: el hueco de la mitad que manda quedaría tapado."""
+    _, capas = capas_de("xi-doble")
+    geo = editor.geometria(capas + [{"id": 99, "op": "restar", "anillos": [agujero(-0.3, 0.1)]}], s.BISEL, simetria)
+    assert (not geo.contains(Point(-0.3, 0.1))) == izquierda
+    assert (not geo.contains(Point(0.3, 0.1))) == derecha
+
+
+def test_simetria_ab_y_doble():
+    _, capas = capas_de("xi-doble")
+    hueco = [{"id": 99, "op": "restar", "anillos": [agujero(-0.3, 0.1)]}]
+    ab = editor.geometria(capas + hueco, s.BISEL, {"ab": True, "y": 1})
+    assert not ab.contains(Point(-0.3, 0.1)) and not ab.contains(Point(-0.3, -0.1))
+    doble = editor.geometria(capas + hueco, s.BISEL, {"lr": True, "ab": True, "x": -1, "y": 1})
+    assert all(not doble.contains(Point(x, y)) for x in (-0.3, 0.3) for y in (-0.1, 0.1))
+
+
+def test_simetria_generada_glb_simetrico(salida):
+    """Criterio de F2: con simetría izq. ↔ der., un hueco en la mitad que manda sale en los
+    dos lados del GLB, y su silueta coincide con su reflejo (IoU ≥ 0,999)."""
+    import verificar
+    doc, capas = capas_de("xi-doble")
+    doc["simetria"] = {"lr": True, "x": -1}
+    info = editor.generar("simetrico", doc, capas + [{"id": 99, "op": "restar", "anillos": [agujero(-0.3, 0.1)]}])
+    assert info["estanca"]
+    m, _ = verificar.silueta_modelo(salida / "glb" / "simetrico.glb")
+    iou = (m & m[:, ::-1]).sum() / (m | m[:, ::-1]).sum()
+    assert iou >= 0.999, iou
+
+
+def test_simetria_no_degrada_un_simbolo_simetrico(salida):
+    """xi-doble se aprobó con --simetria-lr: rehecho desde su mitad izquierda sigue APROBADO."""
+    doc, capas = capas_de("xi-doble")
+    doc["simetria"] = {"lr": True, "x": -1}
+    editor.generar("xi-mitad", doc, capas)
+    codigo, v = verificar(salida / "glb" / "xi-mitad.glb", RAIZ / "fuentes" / "xi-doble.png")
+    assert codigo == 0 and v["aprobado"], v

@@ -20,6 +20,14 @@ try {
   comprobar(await p.$$eval('#capas li', (l) => l.length) === 2, 'xi-doble abre con 2 capas');
   comprobar((await p.evaluate(() => window.editor.resultado().length)) === 2, 'la geometría exacta llega del servidor (2 piezas)');
   comprobar(errores.length === 0, `abre sin internet: ninguna petición fuera de localhost ${errores.join(' | ')}`);
+  // la vista 3D acaba mostrando la malla real (la de «Generar»), no una aproximación
+  await p.waitForFunction(() => /Acabado real/.test(document.querySelector('#etiqueta3d').textContent), { timeout: 30000 });
+  const tri3d = await p.evaluate(() => window.editor.triangulos3d());
+  await p.$eval('#nombre', (x) => { x.value = 'paridad-3d'; });
+  await p.click('#bGenerar');
+  await p.waitForFunction(() => /triángulos/.test(document.querySelector('#estado').textContent), { timeout: 60000 });
+  const triGlb = Number((await p.$eval('#estado', (x) => x.textContent)).match(/([\d.]+) triángulos/)[1].replace(/\./g, ''));
+  comprobar(tri3d === triGlb, `la vista 3D es la malla real: ${tri3d} triángulos, los mismos que el GLB generado (${triGlb})`);
 
   const pto = await puntoEnCapa(p);
   await p.mouse.click(...pto);
@@ -203,6 +211,63 @@ try {
     await s.waitForFunction(() => window.editor.doc().capas.length === 2, { timeout: 10000 });
     comprobar(enviada?.length === 2 && enviada[0][0] === enviada[1][0], `con Mayús, un arrastre algo torcido sale vertical exacto (x ${enviada?.map((q) => q[0]).join(' = ')})`);
     comprobar(true, 'y con la costura de arriba separa las dos mitades');
+    await s.close();
+  }
+
+  // F2: imán al mover (un rectángulo nuevo, soltado a 3 px del eje, queda centrado en x = 0
+  // exacto) y simetría en vivo (un hueco en la mitad izquierda sale también en la derecha)
+  {
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'xi-doble');
+    const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+    await s.keyboard.press('r');
+    const [r0x, r0y] = await cli(-0.25, -0.62), [r1x, r1y] = await cli(-0.1563, -0.68);  // bajo el símbolo; ancho 0,0937, que no alinea sus bordes con nada
+    await s.mouse.move(r0x, r0y); await s.mouse.down(); await s.mouse.move(r1x, r1y, { steps: 4 }); await s.mouse.up();
+    const rect = await s.evaluate(() => window.editor.doc().capas.at(-1));
+    const [cx, cy] = await cli(rect.t.x, rect.t.y);
+    const zoom = await s.evaluate(() => { const [a] = window.editor.aCliente(0, 0), [b] = window.editor.aCliente(1, 0); return b - a; });
+    const [ex] = await cli(0, rect.t.y);
+    await s.mouse.move(cx, cy); await s.mouse.down();
+    await s.mouse.move((cx + ex) / 2, cy, { steps: 4 }); await s.mouse.move(ex + 1.5, cy, { steps: 4 });  // 1,5 px a la derecha del eje
+    const guias = await s.evaluate(() => window.editor.guias().length);
+    await s.mouse.up();
+    const x = await s.evaluate(() => window.editor.doc().capas.at(-1).t.x);
+    comprobar(guias > 0 && Math.abs(x) < 1e-12, `soltado a 1,5 px del eje queda en x = 0 exacto, con guía rosa (x = ${x}, ${guias} guía(s), 1 px = ${(1 / zoom).toFixed(4)})`);
+    await s.keyboard.press('Escape');
+
+    // imán en los nodos: una esquina del rectángulo, soltada a 3 px de una esquina de
+    // xi-doble, queda exactamente encima
+    await s.click(`#capas li[data-id="${rect.id}"]`);
+    await s.keyboard.press('Enter');
+    await s.waitForFunction(() => window.editor.exacta() && window.editor.bordes().length > 0, { timeout: 30000 });
+    const destino = await s.evaluate((id) => window.editor.bordes().find(([, , c]) => c !== id)[0], rect.id);
+    const nodo = await s.$eval('#sobre .nodo', (n) => { const r = n.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+    const [dx, dy] = await cli(...destino);
+    await s.mouse.move(...nodo); await s.mouse.down(); await s.mouse.move(dx + 3, dy - 2, { steps: 8 }); await s.mouse.up();
+    const fin = await s.evaluate((id) => { const c = window.editor.doc().capas.find((k) => k.id === id), [u, v] = c.anillos[0][0];
+      const co = Math.cos(c.t.r), si = Math.sin(c.t.r); return [c.t.x + co * u * c.t.sx - si * v * c.t.sy, c.t.y + si * u * c.t.sx + co * v * c.t.sy]; }, rect.id);
+    comprobar(Math.hypot(fin[0] - destino[0], fin[1] - destino[1]) < 1e-12, `el nodo engancha exacto a la esquina de otra capa (${fin.map((v) => v.toFixed(6))} = ${destino.map((v) => v.toFixed(6))})`);
+    await s.keyboard.press('Escape'); await s.keyboard.press('Escape');
+
+    await s.select('[data-s=tipo]', 'lr');
+    await s.waitForFunction(() => window.editor.doc().simetria?.lr, { timeout: 5000 });
+    await s.keyboard.press('o');
+    const [h0x, h0y] = await cli(-0.32, 0.12), [h1x, h1y] = await cli(-0.28, 0.08);
+    await s.mouse.move(h0x, h0y); await s.mouse.down(); await s.mouse.move(h1x, h1y, { steps: 4 }); await s.mouse.up();
+    await s.select('[data-p=op]', 'restar');
+    comprobar(await s.$$eval('#lienzo .espejo-prov', (l) => l.length) === 1, 'la vista provisional muestra el reflejo de la mitad que manda');
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    const dentro = await s.evaluate(() => {
+      const res = window.editor.resultado();
+      const en = ([x, y]) => res.some((poli) => poli.reduce((n, a) => {
+        let c = false; for (let i = 0, j = a.length - 1; i < a.length; j = i++) {
+          if ((a[i][1] > y) !== (a[j][1] > y) && x < (a[j][0] - a[i][0]) * (y - a[i][1]) / (a[j][1] - a[i][1]) + a[i][0]) c = !c;
+        } return n ^ c; }, false));
+      let asimetricos = 0;  // 400 puntos al azar: dentro(p) == dentro(reflejo de p)
+      for (let k = 0; k < 400; k++) { const p = [Math.random() - 0.5, Math.random() - 0.5]; if (en(p) !== en([-p[0], p[1]])) asimetricos++; }
+      return { izq: en([-0.3, 0.1]), der: en([0.3, 0.1]), asimetricos };
+    });
+    comprobar(!dentro.izq && !dentro.der, 'con simetría izq. ↔ der., el hueco hecho a la izquierda sale en los dos lados');
+    comprobar(dentro.asimetricos === 0, `y la geometría exacta es simétrica (${dentro.asimetricos} de 400 puntos distintos de su reflejo)`);
     await s.close();
   }
 

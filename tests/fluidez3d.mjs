@@ -12,7 +12,7 @@ e.chrome = await puppeteer.launch({ executablePath: process.env.CHROME || '/Appl
   headless: 'new', defaultViewport: { width: 1500, height: 850 } });
 try {
   const { p } = await abrirEditor(e.chrome, e.url, 'shou-circular');
-  await p.waitForFunction(() => /Planta exacta/.test(document.querySelector('#etiqueta3d').textContent));
+  await p.waitForFunction(() => /Acabado real/.test(document.querySelector("#etiqueta3d").textContent));
   const gpu = await p.$eval('#tres canvas', (c) => { const gl = c.getContext('webgl2'); return gl.getParameter(gl.getExtension('WEBGL_debug_renderer_info').UNMASKED_RENDERER_WEBGL); });
   console.log(`GPU: ${gpu}`);
   const grabar = () => p.evaluate(() => { window.__t = []; window.__d = window.editor.dibujados3d(); const f = (t) => { window.__t.push(t); if (window.__grabando) requestAnimationFrame(f); }; window.__grabando = true; requestAnimationFrame(f); });
@@ -35,7 +35,7 @@ try {
   await p.mouse.up();
   comprobar(b.p95 <= P95, `(b) arrastrar la pieza grande en 2D: p95 ${b.p95.toFixed(1)} ms por fotograma · lentos (>20 ms): ${b.lentos}`);
   comprobar(b.dibujados >= b.cuadros * 0.8, `(b) el 3D sigue al arrastre: ${b.dibujados} dibujos 3D en ${b.cuadros} fotogramas`);
-  await p.waitForFunction(() => /Planta exacta/.test(document.querySelector('#etiqueta3d').textContent), { timeout: 30000 });
+  await p.waitForFunction(() => /Acabado real/.test(document.querySelector("#etiqueta3d").textContent), { timeout: 30000 });
   comprobar(true, '(b) al soltar, la geometría exacta sustituye a la provisional');
 
   // (c) y (d) pellizco del trackpad: Chrome lo entrega como rueda con ⌃, varios eventos

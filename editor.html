@@ -69,6 +69,14 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #sobre .sugerencia-toque:hover+.sugerencia{stroke:#fff;opacity:1;stroke-width:3.5}
 #sobre .guia-iman{stroke:#ff4fa3;stroke-width:1;stroke-dasharray:4 3;pointer-events:none}
 #sobre .punto-iman{fill:none;stroke:#ff4fa3;stroke-width:1.5;pointer-events:none}
+#lienzo .eje-simetria{stroke:#58b4ff;stroke-width:1.5;stroke-dasharray:8 5;pointer-events:none}
+#lienzo .espejo-prov,#lienzo .espejo-prov .capa,#lienzo .tapa-prov{pointer-events:none}
+#lienzo .tapa-prov{fill:var(--fondo);opacity:.72}
+#lienzo:not(.provisional) .espejo-prov,#lienzo:not(.provisional) .tapa-prov{display:none}
+.flotante-espejo{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;will-change:transform;transform-origin:0 0;opacity:.85}
+.flotante-espejo .capa{stroke:none}
+.flotante-espejo .capa.unir{fill:var(--laca)}
+.flotante-espejo .capa.restar{fill:var(--fondo)}
 #lienzo .costura,#flotante .costura{fill:none;stroke:#ff5a5a;stroke-width:1.5;stroke-dasharray:5 4;pointer-events:none}
 #lienzo.herr-rect,#lienzo.herr-elipse,#lienzo.herr-cuchilla{cursor:crosshair}
 #lienzo.herr-rect .capa,#lienzo.herr-elipse .capa,#lienzo.herr-cuchilla .capa{cursor:crosshair}
@@ -156,7 +164,7 @@ function caja(capa) {
 }
 const esquinas = (b) => [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]];
 const anillosMundo = (c) => c.anillos.map((r) => r.map((p) => aMundo(c.t, p)));
-const capasMundo = () => doc.capas.filter((c) => c.visible).map((c) => ({ op: c.op, anillos: anillosMundo(c) }));
+const capasMundo = () => doc.capas.filter((c) => c.visible).map((c) => ({ id: c.id, op: c.op, anillos: anillosMundo(c) }));
 const capaSel = () => doc?.capas.find((c) => c.id === sel) || null;
 
 function distSeg(p, a, b) {
@@ -203,6 +211,24 @@ function dCapa(c) {
 }
 let dExacto = '', dContorno = null;
 
+// Simetría en vivo (la geometría que cuenta la hace el servidor, simetrizar()). Aquí solo la
+// vista provisional: la mitad que no manda, tapada a medias, y encima el reflejo de las
+// capas recortadas a la mitad que manda. Copias de las capas y no un <use>: a los clones de
+// un <use> no les llegan las reglas CSS del documento y el reflejo salía negro.
+const G = 10;  // más que cualquier símbolo
+function espejoProvisional(capas) {
+  const S = doc.simetria;
+  if (!S?.lr && !S?.ab) return '';
+  const x0 = S.lr ? Math.min(0, S.x * G) : -G, x1 = S.lr ? Math.max(0, S.x * G) : G;
+  const y0 = S.ab ? Math.min(0, S.y * G) : -G, y1 = S.ab ? Math.max(0, S.y * G) : G;
+  const reflejos = [...(S.lr ? ['-1 1'] : []), ...(S.ab ? ['1 -1'] : []), ...(S.lr && S.ab ? ['-1 -1'] : [])];
+  const tapas = [...(S.lr ? [[S.x > 0 ? -G : 0, -G, G, 2 * G]] : []), ...(S.ab ? [[-G, S.y > 0 ? -G : 0, 2 * G, G]] : [])];
+  return `<defs><clipPath id="maestra" clipPathUnits="userSpaceOnUse"><rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}"/></clipPath></defs>` +
+    tapas.map(([x, y, w, h]) => `<rect class="tapa-prov" x="${x}" y="${y}" width="${w}" height="${h}"/>`).join('') +
+    reflejos.map((k) => `<g class="espejo-prov" transform="scale(${k})" clip-path="url(#maestra)">${capas}</g>`).join('') +
+    (S.lr ? `<line class="eje-simetria" y1="-1000" y2="1000"/>` : '') + (S.ab ? `<line class="eje-simetria" x1="-1000" x2="1000"/>` : '');
+}
+
 function dibujar() {
   let capas = '';
   let costuras = '';
@@ -212,15 +238,16 @@ function dibujar() {
   }
   lienzo.innerHTML = `<g id="mundo" transform="${marcoMundo()}">
       <circle class="guia" r="0.5"/><line class="guia" x1="-1000" x2="1000"/><line class="guia" y1="-1000" y2="1000"/>
-      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/>${capas}${costuras}</g>`;
+      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/><g id="capasLienzo">${capas}</g>${espejoProvisional(capas)}${costuras}</g>`;
   lienzo.setAttribute('class', `herr-${herramienta}${espacio ? ' pan' : ''}${exacta ? '' : ' provisional'}`);
   sobre();
 }
 // lo que cambia en cada fotograma de un arrastre: la capa tocada, la selección y las asas
 function refrescar(c) {
   if (c) {
-    const p = lienzo.querySelector(`path.capa[data-id="${c.id}"]`);
-    if (p) { p.setAttribute('transform', marcoCapa(c.t)); p.setAttribute('d', dCapa(c)); }
+    for (const p of lienzo.querySelectorAll(`path.capa[data-id="${c.id}"]`)) {  // la capa y sus reflejos
+      p.setAttribute('transform', marcoCapa(c.t)); p.setAttribute('d', dCapa(c));
+    }
   }
   sobre();
 }
@@ -256,14 +283,29 @@ const flotante = $('#flotante');
 let flota = null;
 function empezarFlotante(c) {
   const costura = lienzo.querySelector(`path[data-costura="${c.id}"]`);
-  for (const el of [lienzo.querySelector(`path.capa[data-id="${c.id}"]`), costura]) el?.style.setProperty('visibility', 'hidden');
+  for (const el of [...lienzo.querySelectorAll(`path.capa[data-id="${c.id}"]`), costura]) el?.style.setProperty('visibility', 'hidden');
   flotante.innerHTML = `<g transform="${marcoMundo()}"><path class="capa ${c.op}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>
     <path class="contorno" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>
     ${costura ? `<path class="costura" transform="${marcoCapa(c.t)}" d="${costura.getAttribute('d')}"/>` : ''}</g>`;
-  flota = { inicio: inv(mul(matMundo(), matCapa(c.t))) };
+  flota = { inicio: inv(mul(matMundo(), matCapa(c.t))), espejos: [] };
+  // con simetría, su reflejo viaja igual: una copia por reflejo, movida con M·D·M (M, el
+  // espejo en pantalla; D, el arrastre). Sin recortar al eje: es solo la vista provisional
+  const S = doc.simetria, [, , , , ex, ey] = matMundo();
+  const Ms = [...(S?.lr ? [[-1, 0, 0, 1, 2 * ex, 0]] : []), ...(S?.ab ? [[1, 0, 0, -1, 0, 2 * ey]] : []), ...(S?.lr && S?.ab ? [[-1, 0, 0, -1, 2 * ex, 2 * ey]] : [])];
+  for (const M of Ms) {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    el.setAttribute('class', 'flotante-espejo');
+    el.innerHTML = `<g transform="matrix(${M.join(' ')})"><g transform="${marcoMundo()}"><path class="capa ${c.op}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/></g></g>`;
+    flotante.after(el);
+    flota.espejos.push({ el, M });
+  }
 }
-function moverFlotante(c) { flotante.style.transform = `matrix(${mul(mul(matMundo(), matCapa(c.t)), flota.inicio).join(',')})`; }
-function soltarFlotante() { flotante.innerHTML = ''; flotante.style.transform = ''; flota = null; }
+function moverFlotante(c) {
+  const D = mul(mul(matMundo(), matCapa(c.t)), flota.inicio);
+  flotante.style.transform = `matrix(${D.join(',')})`;
+  for (const { el, M } of flota.espejos) el.style.transform = `matrix(${mul(mul(M, D), M).join(',')})`;
+}
+function soltarFlotante() { flotante.innerHTML = ''; flotante.style.transform = ''; for (const { el } of flota.espejos) el.remove(); flota = null; }
 
 function sobre() {
   const c = capaSel(), cont = $('#contorno');
@@ -297,7 +339,11 @@ function sobre() {
         `<line class="sugerencia" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"/>`;
     }).join('');
   }
-  if (herramienta === 'cuchilla' && marcaIman) {
+  for (const g of guiasMover) {
+    const [x0, y0] = aPantalla(g.a), [x1, y1] = aPantalla(g.b);
+    html += `<line class="guia-iman" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"/>`;
+  }
+  if (marcaIman) {
     for (const r of marcaIman.guias) {
       const k0 = Math.max(r.k0, -5), k1 = Math.min(r.k1, 5);  // el borde y su alcance; los ejes, a lo largo de la vista
       const [x0, y0] = aPantalla([r.o[0] + r.u[0] * k0, r.o[1] + r.u[1] * k0]), [x1, y1] = aPantalla([r.o[0] + r.u[0] * k1, r.o[1] + r.u[1] * k1]);
@@ -333,11 +379,12 @@ async function pedirExacta() {
   if (arrastre) { espera = setTimeout(pedirExacta, 400); return; }
   const id = peticion;
   let r;
-  try { r = await api('/api/combinar', { capas: capasMundo(), bisel: doc.ajustes.bisel }); }
+  try { r = await api('/api/combinar', { capas: capasMundo(), bisel: doc.ajustes.bisel, simetria: doc.simetria }); }
   catch { r = { error: 'sin respuesta del servidor' }; }
   if (id !== peticion) return;
   if (r.error) { $('#etiqueta2d').textContent = `Vista provisional · la exacta falló: ${r.error}`; return; }
   resultado = r.resultado; exacta = true; dExacto = anillosD(resultado.flat());
+  bordes = r.bordes;
   lienzo.classList.remove('provisional'); $('.exacto').setAttribute('d', dExacto);
   $('#etiqueta2d').textContent = 'Geometría exacta (la del GLB)';
   construir3D();
@@ -356,6 +403,13 @@ function capasUI() {
       <span class="nom">${esc(c.nombre)}</span></li>`).join('');
 }
 const num = (v, d = 3) => Number(v.toFixed(d));
+const tipoSimetria = () => { const S = doc.simetria; return S?.lr && S?.ab ? 'doble' : S?.lr ? 'lr' : S?.ab ? 'ab' : ''; };
+function ladosSimetria() {  // qué mitad (o cuarto) manda: la otra es su reflejo
+  const S = doc.simetria ?? { x: -1, y: 1 }, t = tipoSimetria();
+  const op = t === 'lr' ? [[-1, S.y, 'Izquierda'], [1, S.y, 'Derecha']] : t === 'ab' ? [[S.x, 1, 'Arriba'], [S.x, -1, 'Abajo']]
+    : t === 'doble' ? [[-1, 1, 'Arriba izq.'], [1, 1, 'Arriba der.'], [-1, -1, 'Abajo izq.'], [1, -1, 'Abajo der.']] : [];
+  return op.map(([x, y, n]) => `<option value="${x},${y}" ${S.x === x && S.y === y ? 'selected' : ''}>${n}</option>`).join('');
+}
 function panel() {
   if ($('#props').contains(document.activeElement)) return;  // no pisar lo que se escribe
   const c = capaSel(), a = doc.ajustes;
@@ -385,14 +439,22 @@ function panel() {
   html += `<h3>Acabado (todo el símbolo)</h3><div class="rejilla">
     <label>Grosor<input type="number" step="0.005" min="0.01" data-g="fondo" value="${num(a.fondo)}"></label>
     <label>Canto<input type="number" step="0.001" min="0.001" data-g="bisel" value="${num(a.bisel)}"></label>
-    <label class="ancho">Color<input type="color" data-g="color" value="${hex}"></label></div>
+    <label class="ancho">Color<input type="color" data-g="color" value="${hex}"></label>
+    <label>Simetría<select data-s="tipo">${[['', 'Ninguna'], ['lr', 'Izq. ↔ der.'], ['ab', 'Arriba ↔ abajo'], ['doble', 'Doble']]
+      .map(([v, n]) => `<option value="${v}" ${tipoSimetria() === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+    <label>Manda<select data-s="lado" ${tipoSimetria() ? '' : 'disabled'}>${ladosSimetria()}</select></label></div>
     <p class="nota">Unidades: diámetro del símbolo = 1. Grosor y canto de la galería: ${ajustesBase.fondo} y ${ajustesBase.bisel}.</p>`;
   $('#props').innerHTML = html;
 }
 
 $('#props').addEventListener('change', (e) => {
   const el = e.target, c = capaSel();
-  if (el.dataset.g) {
+  if (el.dataset.s) {
+    const S = doc.simetria ?? { x: -1, y: 1 };
+    if (el.dataset.s === 'tipo') { S.lr = ['lr', 'doble'].includes(el.value); S.ab = ['ab', 'doble'].includes(el.value); }
+    else [S.x, S.y] = el.value.split(',').map(Number);
+    doc.simetria = S.lr || S.ab ? S : undefined;
+  } else if (el.dataset.g) {
     const a = doc.ajustes;
     if (el.dataset.g === 'color') {
       const k = new THREE.Color(el.value);  // sRGB del selector -> lineal, como glTF
@@ -515,11 +577,20 @@ addEventListener('pointermove', (e) => {
     seguirGesto(); return;
   }
   if (A.tipo === 'dibujo') { A.b = m; sobre(); return; }
-  if (A.tipo === 'mover') { c.t.x = A.t0.x + m[0] - A.m0[0]; c.t.y = A.t0.y + m[1] - A.m0[1]; }
+  if (A.tipo === 'mover') {
+    let dx = m[0] - A.m0[0], dy = m[1] - A.m0[1];
+    const soloX = e.shiftKey && Math.abs(dx) >= Math.abs(dy), soloY = e.shiftKey && !soloX;  // Mayús: un solo eje
+    if (soloX) dy = 0; if (soloY) dx = 0;
+    c.t.x = A.t0.x + dx; c.t.y = A.t0.y + dy;
+    imanMover(c, e, A, !soloY, !soloX);
+  }
   if (A.tipo === 'nodo') {
+    A.fuente ??= bordes.filter(([, , id]) => id !== c.id);  // el imán, con lo de las demás capas
+    const { p: q, marca } = iman(m, null, e, A.fuente);
+    marcaIman = marca;
     c.anillos = [...c.anillos];  // lista nueva: su trazado cacheado ya no vale
     c.anillos[A.k] = [...c.anillos[A.k]];
-    c.anillos[A.k][A.i] = aLocal(c.t, m);
+    c.anillos[A.k][A.i] = aLocal(c.t, q);
   }
   if (A.tipo === 'escala') {
     // la esquina opuesta queda fija: la escala sale de la distancia a ella en el marco girado
@@ -561,6 +632,7 @@ addEventListener('pointerup', (e) => {
   if (!A) return;
   if (A.tipo === 'pan') { terminarGesto(); return; }
   if (flota) soltarFlotante();  // commit() redibuja el lienzo con la capa en su sitio
+  guiasMover = []; if (herramienta !== 'cuchilla') marcaIman = null;
   if (A.tipo === 'mover' && A.abreNodos && !A.movido) {
     nodos = true; nodoSel = null;
     ultimoClic = { t: 0, id: null };  // un tercer clic rápido no es otro doble clic
@@ -592,6 +664,55 @@ $('#dos').addEventListener('wheel', (e) => {
   seguirGesto();
   clearTimeout(finGesto); finGesto = setTimeout(terminarGesto, 150);
 }, { passive: false });
+
+// ---------- imán al mover capas (guías inteligentes, como en Figma)
+// Los bordes y el centro de la caja que se mueve (izquierda, centro, derecha; abajo,
+// centro, arriba) se enganchan, cada eje por su lado y a 6 px, a: los bordes y centros de
+// las cajas de las demás capas, las esquinas de sus bordes rectos, los ejes y el círculo
+// de diámetro 1. Los objetivos se calculan una vez, al empezar el arrastre. ⌘ lo apaga.
+let guiasMover = [];
+function cajaMundo(c, b = caja(c)) {
+  const q = esquinas(b).map((p) => aMundo(c.t, p)), xs = q.map((p) => p[0]), ys = q.map((p) => p[1]);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+}
+function objetivosIman(c) {
+  // prioridad (0 manda): eje, círculo, cajas de capas, esquinas
+  const xs = [{ v: 0, pr: 0 }, { v: -0.5, pr: 1 }, { v: 0.5, pr: 1 }], ys = [{ v: 0, pr: 0 }, { v: -0.5, pr: 1 }, { v: 0.5, pr: 1 }];
+  for (const o of doc.capas) if (o.visible && o !== c) {
+    const k = cajaMundo(o);
+    for (const v of [k[0], (k[0] + k[2]) / 2, k[2]]) xs.push({ v, de: k, pr: 2 });
+    for (const v of [k[1], (k[1] + k[3]) / 2, k[3]]) ys.push({ v, de: k, pr: 2 });
+  }
+  const visibles = new Set(doc.capas.filter((o) => o.visible && o !== c).map((o) => o.id));
+  for (const [a, b, id] of bordes) if (visibles.has(id)) for (const q of [a, b]) {
+    xs.push({ v: q[0], de: [q[0], q[1], q[0], q[1]], pr: 3 }); ys.push({ v: q[1], de: [q[0], q[1], q[0], q[1]], pr: 3 });
+  }
+  return { xs, ys };
+}
+function imanMover(c, e, A, enX, enY) {
+  guiasMover = [];
+  if (e.metaKey) return;
+  A.cajaLocal ??= caja(c); A.objetivos ??= objetivosIman(c);
+  const tol = 6 / vista.zoom, mismo = 0.5 / vista.zoom, k = cajaMundo(c, A.cajaLocal);
+  // el más cercano; pero dos a menos de medio píxel son el mismo sitio a la vista y manda
+  // el de más prioridad (una esquina a 5e-6 del eje le ganaba al eje: medido en xi-doble)
+  const mejor = (valores, objetivos) => {
+    let r = null;
+    for (const v of valores) for (const o of objetivos) {
+      const d = o.v - v;
+      if (Math.abs(d) >= tol) continue;
+      if (!r || Math.abs(d) < Math.abs(r.d) - mismo || (Math.abs(Math.abs(d) - Math.abs(r.d)) <= mismo && o.pr < r.o.pr)) r = { d, o };
+    }
+    return r;
+  };
+  const mx = enX && mejor([k[0], (k[0] + k[2]) / 2, k[2]], A.objetivos.xs);
+  const my = enY && mejor([k[1], (k[1] + k[3]) / 2, k[3]], A.objetivos.ys);
+  if (mx) c.t.x += mx.d;
+  if (my) c.t.y += my.d;
+  const n = cajaMundo(c, A.cajaLocal);  // la guía va de la caja que se mueve a lo que la atrae
+  if (mx) { const d = mx.o.de ?? [0, -0.6, 0, 0.6]; guiasMover.push({ a: [mx.o.v, Math.min(n[1], d[1])], b: [mx.o.v, Math.max(n[3], d[3])] }); }
+  if (my) { const d = my.o.de ?? [-0.6, 0, 0.6, 0]; guiasMover.push({ a: [Math.min(n[0], d[0]), my.o.v], b: [Math.max(n[2], d[2]), my.o.v] }); }
+}
 
 // ---------- nodos
 function insertarNodo(m) {
@@ -697,7 +818,7 @@ function cruce(r, s) {
   const q = [r.o[0] + r.u[0] * k, r.o[1] + r.u[1] * k];
   return enAlcance(q, r) && enAlcance(q, s) ? q : null;
 }
-function iman(m, desde, e) {
+function iman(m, desde, e, fuente = bordes) {
   if (e.metaKey) return { p: m, marca: null };
   const tolP = 8 / vista.zoom, tolL = 6 / vista.zoom, lejos = (q, p) => Math.hypot(q[0] - p[0], q[1] - p[1]);
   let p = m, rayo = null;
@@ -708,10 +829,10 @@ function iman(m, desde, e) {
   }
   if (!rayo) {
     let mejor = null;
-    for (const b of bordes) for (const q of b) if (lejos(q, p) < tolP && (!mejor || lejos(q, p) < lejos(mejor, p))) mejor = q;
+    for (const [a, b] of fuente) for (const q of [a, b]) if (lejos(q, p) < tolP && (!mejor || lejos(q, p) < lejos(mejor, p))) mejor = q;
     if (mejor) return { p: mejor, marca: { p: mejor, guias: [] } };
   }
-  const cerca = [...bordes.map(recta), ...EJES].filter((r) => distRecta(p, r) < (rayo ? tolP : tolL))
+  const cerca = [...fuente.map(recta), ...EJES].filter((r) => distRecta(p, r) < (rayo ? tolP : tolL))
     .sort((a, b) => distRecta(p, a) - distRecta(p, b));
   if (rayo) {
     for (const r of cerca) { const q = cruce(rayo, r); if (q && lejos(q, p) < tolP) return { p: q, marca: { p: q, guias: [r] } }; }
@@ -731,7 +852,6 @@ async function pedirSugerencias() {
     .catch(() => ({ error: 'sin respuesta' }));
   if (id !== peticionSug || herramienta !== 'cuchilla') return;
   sugeridas = r.error ? null : r.sugerencias;
-  bordes = r.error ? [] : r.bordes;
   sobre();
 }
 
@@ -852,8 +972,12 @@ function poner(obj, etiqueta) {
   $('#etiqueta3d').textContent = etiqueta;
   pintar3d = true;
 }
-function extruir(polis) {  // [[exterior, hueco...], ...] -> sólido con canto (aproximado)
-  const { fondo, bisel, color } = doc.ajustes;
+// Vista provisional: extrusión SIN canto. El bisel de three.js (ExtrudeGeometry) hunde el
+// contorno un canto entero y en las esquinas que entran (redondeadas a 0,6 × canto) lo
+// cruzaba consigo mismo: caras torcidas en los huecos que el GLB no tiene. El canto de
+// verdad llega con la malla real del servidor (pedirMalla).
+function extruir(polis) {  // [[exterior, hueco...], ...] -> sólido de caras rectas
+  const { fondo, color } = doc.ajustes;
   laca.color.setRGB(color[0], color[1], color[2], THREE.LinearSRGBColorSpace);
   const limpio = (r) => { const p = r.map(([x, y]) => new THREE.Vector2(x, y)); if (p.length > 1 && p[0].equals(p.at(-1))) p.pop(); return p; };
   const formas = polis.map((poli) => {
@@ -861,14 +985,30 @@ function extruir(polis) {  // [[exterior, hueco...], ...] -> sólido con canto (
     f.holes = poli.slice(1).map((r) => new THREE.Path(limpio(r)));
     return f;
   });
-  const prof = Math.max(fondo - 2 * bisel, 1e-4);
-  const g = new THREE.ExtrudeGeometry(formas, { depth: prof, curveSegments: 1, bevelEnabled: true,
-    bevelThickness: bisel, bevelSize: bisel, bevelOffset: -bisel, bevelSegments: 4 });
-  g.translate(0, 0, -prof / 2);
+  const g = new THREE.ExtrudeGeometry(formas, { depth: fondo, curveSegments: 1, bevelEnabled: false });
+  g.translate(0, 0, -fondo / 2);
   return g;
 }
 function construir3D() {
-  poner(new THREE.Mesh(extruir(resultado), laca), 'Planta exacta, canto aproximado · «Generar GLB» da el acabado final');
+  poner(new THREE.Mesh(extruir(resultado), laca), 'Planta exacta, sin canto · calculando el acabado real…');
+  pedirMalla();
+}
+// la malla real, la misma que escribe «Generar» (/api/previa, 0,7–1,9 s medido); una
+// edición en medio cambia `peticion` y la respuesta vieja se descarta
+async function pedirMalla() {
+  const id = peticion;
+  let datos;
+  try {
+    const r = await fetch('/api/previa', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ doc, capas: capasMundo() }) });
+    if (!r.ok) throw new Error((await r.json()).error);
+    datos = await r.arrayBuffer();
+  } catch (err) {
+    if (id === peticion) $('#etiqueta3d').textContent = `Planta exacta, sin canto · el acabado real falló: ${err.message}`;
+    return;
+  }
+  if (id !== peticion) return;
+  new GLTFLoader().parse(datos, '', (g) => { if (id === peticion) poner(g.scene, 'Acabado real (la malla que se genera)'); });
 }
 // Mientras se edita, el 3D sigue al ratón: cada capa que une es su propio sólido, extruido
 // una vez en coordenadas locales y colocado con su t; arrastrar solo cambia su matriz.
@@ -889,7 +1029,8 @@ function provisional3D() {
     colocar(m, c.t); grupo.add(m);
   }
   const restas = doc.capas.some((c) => c.visible && c.op === 'restar');
-  poner(grupo, `Vista 3D provisional${restas ? ' (sin las restas)' : ''} · calculando la exacta…`);
+  const falta = [...(restas ? ['las restas'] : []), ...(doc.simetria ? ['la simetría'] : [])].join(' ni ');
+  poner(grupo, `Vista 3D provisional${falta ? ` (sin ${falta})` : ''} · calculando la exacta…`);
 }
 let capa3dPendiente = null;  // como mucho una actualización por fotograma
 function seguir3D(c) {
@@ -1016,7 +1157,7 @@ async function abrir(s) {
 $('#abrir').addEventListener('change', (e) => e.target.value && abrir(e.target.value));
 
 // para las pruebas de tests/: estado de solo lectura
-window.editor = { marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado };
+window.editor = { triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado };
 
 const lista = await api('/api/simbolos');
 ajustesBase = lista.ajustes;
