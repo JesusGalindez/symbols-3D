@@ -883,3 +883,23 @@ def test_texto_llega_con_los_nodos_exactos_de_la_fuente():
     gs, cmap = fuente.getGlyphSet(), fuente.getBestCmap()
     puntos = sum(len(fuente["glyf"][cmap[ord(ch)]].getCoordinates(fuente["glyf"])[0]) for ch in texto) if "glyf" in fuente else math.inf
     assert sum(len(a) for c in capas for a in c["anillos"]) <= puntos
+
+
+# ---------- G9: historial y versiones con nombre
+def test_version_con_nombre_sobrevive_al_recorte(salida, monkeypatch):
+    """Criterio de G9: una versión con nombre sobrevive a 30 guardados (el recorte deja 20
+    copias normales y no la toca); el historial la lista con su título."""
+    monkeypatch.setattr(editor, "CADA_COPIA", 0)
+    doc = editor.piezas_curvas("xi-doble")
+    editor.guardar("versiones", doc)
+    archivo, x0 = editor.guardar_version("versiones", doc, "Antes de cortar"), doc["capas"][0]["t"]["x"]
+    for i in range(30):
+        doc["capas"][0]["t"]["x"] = i * 0.001
+        editor.guardar("versiones", doc)
+    copias = editor.historial("versiones")
+    con_nombre = [c for c in copias if c["titulo"]]
+    assert len(copias) - len(con_nombre) == editor.COPIAS and [c["archivo"] for c in con_nombre] == [archivo]
+    assert con_nombre[0]["titulo"] == "antes de cortar"
+    assert editor.leer_copia("versiones", archivo)["capas"][0]["t"]["x"] == x0
+    with pytest.raises(ValueError):
+        editor.leer_copia("versiones", "../../x.json")

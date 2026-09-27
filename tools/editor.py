@@ -887,8 +887,46 @@ def guardar(nombre, doc):
     copias = sorted(historial.glob("*.json"))
     if not copias or time.time() - copias[-1].stat().st_mtime >= CADA_COPIA:
         (historial / f"{datetime.now():%Y%m%d-%H%M%S-%f}.json").write_text(texto)
-        for vieja in sorted(historial.glob("*.json"))[:-COPIAS]:
-            vieja.unlink()
+        for vieja in sorted(p for p in historial.glob("*.json") if "--" not in p.name)[:-COPIAS]:
+            vieja.unlink()  # las versiones con nombre (con «--») no se recortan
+
+
+COPIA = re.compile(r"^\d{8}-\d{6}-\d{6}(--[a-z0-9-]+)?\.json$")
+
+
+def historial(nombre):
+    """Las copias de editor/.historial/<nombre>/, de la más nueva a la más vieja:
+    [{"archivo", "fecha", "titulo"}]; titulo solo en las versiones con nombre (G9)."""
+    carpeta = docs() / ".historial" / nombre
+    out = []
+    for p in sorted(carpeta.glob("*.json"), reverse=True) if carpeta.is_dir() else []:
+        if COPIA.match(p.name):
+            f = p.name[:15]
+            out.append({"archivo": p.name, "fecha": f"{f[:4]}-{f[4:6]}-{f[6:8]} {f[9:11]}:{f[11:13]}:{f[13:15]}",
+                        "titulo": p.stem.split("--", 1)[1].replace("-", " ") if "--" in p.name else None})
+    return out
+
+
+def leer_copia(nombre, archivo):
+    if not COPIA.match(archivo):
+        raise ValueError("copia no válida")
+    ruta = docs() / ".historial" / nombre / archivo
+    if not ruta.exists():
+        raise ValueError(f"no existe la copia {archivo}")
+    return json.loads(ruta.read_text())
+
+
+def guardar_version(nombre, doc, titulo):
+    """⌥⌘S: una copia con nombre, que el recorte de COPIAS no borra nunca."""
+    validar(doc)
+    if protegido(nombre):
+        raise ValueError(f"{nombre} es un símbolo que no salió del editor: elige otro nombre")
+    limpio = re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", titulo.lower())).strip("-") or "version"
+    carpeta = docs() / ".historial" / nombre
+    carpeta.mkdir(parents=True, exist_ok=True)
+    archivo = f"{datetime.now():%Y%m%d-%H%M%S-%f}--{limpio}.json"
+    (carpeta / archivo).write_text(json.dumps(doc, ensure_ascii=False))
+    return archivo
 
 
 def completar_parche(nombre, doc):
@@ -926,6 +964,17 @@ class Manejador(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         url = urlparse(self.path)
+        if url.path in ("/api/historial", "/api/copia"):
+            q = parse_qs(url.query)
+            nombre = q.get("s", [""])[0]
+            if not NOMBRE.match(nombre):
+                return self.responder({"error": "nombre no válido"}, 400)
+            try:
+                if url.path == "/api/historial":
+                    return self.responder({"copias": historial(nombre)})
+                return self.responder({"doc": leer_copia(nombre, q.get("f", [""])[0])})
+            except ValueError as e:
+                return self.responder({"error": str(e)}, 404)
         if url.path == "/api/fuentes":
             return self.responder({"fuentes": fuentes()})
         if url.path == "/api/simbolos":
@@ -1022,6 +1071,8 @@ class Manejador(SimpleHTTPRequestHandler):
         if not NOMBRE.match(nombre):
             return self.responder({"error": "nombre: minúsculas, números y guiones"}, 400)
         try:
+            if self.path == "/api/version":
+                return self.responder({"archivo": guardar_version(nombre, datos["doc"], str(datos.get("titulo", "")))})
             if self.path == "/api/guardar":
                 guardar(nombre, completar_parche(nombre, datos["doc"]) if datos.get("parche") else datos["doc"])
                 return self.responder({"ok": True})

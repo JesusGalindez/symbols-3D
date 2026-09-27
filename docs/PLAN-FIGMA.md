@@ -636,6 +636,17 @@ restar el texto del disco y generar. Hecho si: APROBADO.
 guardados; el PNG a 2× mide el doble que a 1×; restaurar una copia de la versión 2 en un
 documento de la versión 3 pasa por la migración.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). Sobre lo previsto:
+- Las versiones con nombre son copias en la misma carpeta con `--título` en el nombre
+  del archivo; el recorte de 20 solo cuenta las demás.
+- La miniatura se pinta en el navegador, capa a capa como la vista provisional (sin
+  pedir al servidor la forma exacta de 20 copias): basta para reconocerlas.
+- El botón «SVG» pasa a «Exportar» (⇧⌘E): SVG del diseño o de la selección (el del
+  servidor, con curvas) y PNG de ese SVG a 1×, 2× y 4× (1× = una milésima del diámetro
+  por píxel). Arreglado de paso: desde G2, el SVG exportado desde el editor no llevaba
+  los trazos (el navegador mandaba las capas sin `trazo`).
+Medido: pytest 77, `test:ui` 177 en verde.
+
 **Tarea de usuario (3 min):** estropear un documento, encontrar en el historial la
 versión de hace 10 minutos y restaurarla. Hecho si: el documento es idéntico a esa copia.
 

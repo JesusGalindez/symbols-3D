@@ -34,7 +34,16 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #capas li.hueco-antes{box-shadow:inset 0 2px 0 var(--acento)}
 #capas li.hueco-despues{box-shadow:inset 0 -2px 0 var(--acento)}
 #capas.arrastrando li{cursor:grabbing}
-#ayuda{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:10}
+#ayuda,.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:10}
+.modal[hidden]{display:none}
+.modal .caja-modal{background:var(--panel);border:1px solid var(--borde);border-radius:8px;padding:14px 18px;width:min(720px,92vw);max-height:85vh;overflow:auto}
+.modal h4{margin:0 0 10px;font-size:12px}
+#listaHistorial{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+#listaHistorial li{border:1px solid var(--borde);border-radius:6px;padding:6px;font-size:11px;color:var(--tenue)}
+#listaHistorial li.nombrada{border-color:var(--acento)}
+#listaHistorial svg{width:100%;aspect-ratio:1;background:var(--fondo);border-radius:4px;display:block;margin-bottom:4px}
+#listaHistorial b{color:var(--texto)}
+#lienzo .comparar{fill:none;stroke:#ffb020;stroke-width:1.5;stroke-dasharray:5 3;pointer-events:none}
 #ayuda[hidden]{display:none}
 #ayuda .caja-ayuda{background:var(--panel);border:1px solid var(--borde);border-radius:8px;padding:14px 18px;max-width:760px;max-height:85vh;overflow:auto;columns:2;column-gap:28px}
 #ayuda h4{margin:10px 0 4px;font-size:11px;color:var(--tenue);text-transform:uppercase;letter-spacing:.04em;break-after:avoid}
@@ -166,7 +175,8 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <button id="bRehacer" title="Rehacer (⇧⌘Z)">↷</button>
     <span class="sep"></span>
     <button id="bGuardar" title="Guardar editor/<nombre>.json (⌘S); también se guarda solo">Guardar</button>
-    <button id="bSvg" title="Exportar el diseño como SVG, con sus curvas (sin el redondeo del acabado, que es del GLB)">SVG</button>
+    <button id="bSvg" title="Exportar SVG o PNG (⇧⌘E)">Exportar</button>
+    <button id="bHistorial" title="Historial de versiones (⌥⌘S guarda una con nombre)">Historial</button>
     <button id="bGenerar" class="primario" title="GLB con el acabado exacto de la galería">Generar GLB</button>
     <button id="bAyuda" title="Atajos (?)">?</button>
     <span id="estado"></span>
@@ -185,6 +195,14 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
   <div id="dos"><svg id="lienzo"></svg><svg id="flotante"></svg><svg id="sobre"><g id="mundoSobre"><path id="contorno" class="contorno"/><g id="contornos"></g></g><g id="asas"></g></svg><div id="etiqueta2d" class="etiqueta"></div><div id="cajaTexto" hidden><input id="textoNuevo" placeholder="Texto y Enter" spellcheck="false"><select id="fuenteTexto" title="Fuente"></select></div><svg id="reglaX" class="regla" hidden></svg><svg id="reglaY" class="regla" hidden></svg></div>
   <div id="tres"><div id="etiqueta3d" class="etiqueta"></div></div>
 </div>
+<div id="historial" class="modal" hidden><div class="caja-modal">
+  <h4>Historial de <span id="nombreHistorial"></span> · las 20 copias más nuevas y las versiones con nombre</h4>
+  <div class="fila" style="padding:0 0 10px"><button id="bVersion">Guardar versión con nombre… (⌥⌘S)</button><button id="bQuitarComparar" hidden>Dejar de comparar</button><button id="bCerrarHistorial">Cerrar</button></div>
+  <ul id="listaHistorial"></ul></div></div>
+<div id="exportar" class="modal" hidden><div class="caja-modal" style="width:min(420px,92vw)">
+  <h4>Exportar (sin el redondeo del acabado: ese va en el GLB)</h4>
+  <div class="fila" style="padding:0"><button data-exportar="svg">SVG del diseño</button><button data-exportar="svg-sel">SVG de la selección</button></div>
+  <div class="fila" style="padding:8px 0 0"><button data-exportar="png1">PNG 1×</button><button data-exportar="png2">PNG 2×</button><button data-exportar="png4">PNG 4×</button><button id="bCerrarExportar">Cerrar</button></div></div></div>
 <div id="ayuda" hidden><div class="caja-ayuda">
   <h4>Herramientas</h4><dl><dt>V</dt><dd>Mover</dd><dt>R · O</dt><dd>Rectángulo · elipse (⇧: proporción)</dd>
     <dt>P</dt><dd>Pluma: clic esquina, clic y arrastrar curva; clic en el primero cierra; Enter o Esc deja un camino abierto con trazo; clic en un extremo de un camino lo alarga</dd>
@@ -215,7 +233,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <dt>⇧1 · ⇧2 · ⇧0</dt><dd>Ajustar a todo · a la selección · 100 %</dd><dt>⌘+ · ⌘−</dt><dd>Acercar · alejar</dd></dl>
   <h4>Campos</h4><dl><dt>0,2*3 · (1+2)/4</dt><dd>Operaciones</dd><dt>+0,01 · *2 · /2</dt><dd>Sobre el valor actual</dd><dt>50%</dt><dd>Del valor actual</dd></dl>
   <h4>Archivos</h4><dl><dt>Abrir → Importar SVG…</dt><dd>Un logotipo con sus curvas, una capa por figura</dd>
-    <dt>SVG</dt><dd>Exportar el diseño con sus curvas</dd><dt>Generar GLB</dt><dd>Detallada, ligera y web, con su revisión</dd>
+    <dt>⇧⌘E · Exportar</dt><dd>SVG (diseño o selección, con curvas) y PNG 1×, 2×, 4×</dd><dt>Historial · ⌥⌘S</dt><dd>Copias con miniatura: comparar y restaurar · guardar una versión con nombre</dd><dt>Generar GLB</dt><dd>Detallada, ligera y web, con su revisión</dd>
     <dt>? · Esc</dt><dd>Abrir y cerrar esta ayuda</dd></dl>
 </div></div>
 <script type="module">
@@ -497,7 +515,8 @@ function dibujar() {
   }
   lienzo.innerHTML = `<g id="mundo" transform="${marcoMundo()}">
       <circle class="guia" r="0.5"/><line class="guia" x1="-1000" x2="1000"/><line class="guia" y1="-1000" y2="1000"/>
-      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/><defs>${recortes}</defs><g id="capasLienzo">${capas}</g>${espejoProvisional(capas)}${esqueletos}${costuras}</g>`;
+      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/><defs>${recortes}</defs><g id="capasLienzo">${capas}</g>${espejoProvisional(capas)}${esqueletos}${costuras}${comparando ? comparando.capas.filter((c) => c.visible !== false).map((c) =>
+        `<path class="comparar" transform="${marcoCapa(c.t)}" d="${nodosD(c.anillos.map((a) => (Array.isArray(a[0]) ? a.map(nodo) : a)), c.abierto)}"/>`).join('') : ''}</g>`;
   lienzo.setAttribute('class', `herr-${herramienta}${espacio ? ' pan' : ''}${exacta ? '' : ' provisional'}`);
   sobre();
 }
@@ -1775,6 +1794,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Space') { e.preventDefault(); if (!espacio) { espacio = true; lienzo.classList.add('pan'); } return; }
   if (mod && k === 'z') { e.preventDefault(); irA(puntero + (e.shiftKey ? 1 : -1)); return; }
   if (mod && k === 'd') { e.preventDefault(); duplicar(); return; }
+  if (mod && e.altKey && e.code === 'KeyS') { e.preventDefault(); guardarVersion(); return; }
+  if (mod && e.shiftKey && k === 'e') { e.preventDefault(); $('#exportar').hidden = false; return; }
   if (mod && k === 's') { e.preventDefault(); guardar(); return; }
   if (mod && k === 'a') {
     e.preventDefault();
@@ -1797,6 +1818,7 @@ addEventListener('keydown', (e) => {
     e.preventDefault(); booleanaSel({ KeyU: 'unir', KeyS: 'restar', KeyI: 'intersecar', KeyE: 'excluir' }[e.code]); return;
   }
   if (!$('#ayuda').hidden) { if (e.key === 'Escape' || e.key === '?') ayuda(false); return; }
+  if (!$('#historial').hidden || !$('#exportar').hidden) { if (e.key === 'Escape') $('#historial').hidden = $('#exportar').hidden = true; return; }
   if (e.key === '?') { ayuda(true); return; }
   if (e.shiftKey && e.code === 'Digit1') { ajustarVista(false); return; }
   if (e.shiftKey && e.code === 'Digit2') { ajustarVista(true); return; }
@@ -2535,16 +2557,98 @@ async function svgDiseno() {
   const capas = doc.capas.filter((c) => c.visible).map(capaMundo);
   return api('/api/svg', { capas, simetria: doc.simetria, color: doc.ajustes.color, grupos: doc.grupos });
 }
-$('#bSvg').addEventListener('click', async () => {
-  let r;
-  try { r = await svgDiseno(); } catch { r = { error: 'sin respuesta del servidor' }; }
-  if (r.error) return estado(r.error, true);
+$('#bSvg').addEventListener('click', () => { $('#exportar').hidden = false; });
+$('#bCerrarExportar').addEventListener('click', () => { $('#exportar').hidden = true; });
+// Exportar (G9, ⇧⌘E): SVG del diseño o de la selección (el del servidor: con curvas), y PNG
+// de ese SVG a 1×, 2× o 4× (1× = una milésima del diámetro por píxel)
+async function svgDe(capas) {
+  const r = await api('/api/svg', { capas: capas.map(capaMundo), simetria: doc.simetria, color: doc.ajustes.color, grupos: doc.grupos });
+  if (r.error) throw new Error(r.error);
+  return r.svg;
+}
+function descargar(blob, nombreArchivo) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([r.svg], { type: 'image/svg+xml' }));
-  a.download = `${$('#nombre').value.trim() || 'simbolo'}.svg`;
-  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  estado(`Exportado ${esc(a.download)} con sus curvas (el redondeo del acabado solo va en el GLB)`);
+  a.href = URL.createObjectURL(blob); a.download = nombreArchivo; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function png(k, bajar = true) {
+  const svg = await svgDe(doc.capas.filter((c) => c.visible));
+  const w = Number(/width="([\d.]+)"/.exec(svg)[1]) * k, h = Number(/height="([\d.]+)"/.exec(svg)[1]) * k;
+  const img = new Image(), url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+  await new Promise((ok, mal) => { img.onload = ok; img.onerror = mal; img.src = url; });
+  const lienzoPng = Object.assign(document.createElement('canvas'), { width: Math.round(w), height: Math.round(h) });
+  lienzoPng.getContext('2d').drawImage(img, 0, 0, lienzoPng.width, lienzoPng.height);
+  URL.revokeObjectURL(url);
+  const blob = await new Promise((ok) => lienzoPng.toBlob(ok, 'image/png'));
+  if (bajar) descargar(blob, `${$('#nombre').value.trim() || 'simbolo'}${k > 1 ? `@${k}x` : ''}.png`);
+  return { w: lienzoPng.width, h: lienzoPng.height, bytes: blob.size };
+}
+$('#exportar').addEventListener('click', async (e) => {
+  const q = e.target.dataset.exportar; if (!q) return;
+  const base = $('#nombre').value.trim() || 'simbolo';
+  try {
+    if (q === 'svg' || q === 'svg-sel') {
+      const cs = q === 'svg' ? doc.capas.filter((c) => c.visible) : capasSel().filter((c) => c.visible);
+      if (!cs.length) return estado(q === 'svg' ? 'No hay ninguna capa visible que exportar' : 'No hay nada elegido', true);
+      descargar(new Blob([await svgDe(cs)], { type: 'image/svg+xml' }), `${base}${q === 'svg-sel' ? '-seleccion' : ''}.svg`);
+      estado(`Exportado ${esc(base)}.svg con sus curvas (el redondeo del acabado solo va en el GLB)`);
+    } else { const r = await png(Number(q.slice(3))); estado(`Exportado PNG de ${r.w} × ${r.h} px`); }
+    $('#exportar').hidden = true;
+  } catch (err) { estado(String(err.message ?? err), true); }
 });
+// Historial (G9): las copias de editor/.historial con su miniatura (pintada aquí, capa a
+// capa como la vista provisional); comparar pinta la copia en naranja sobre el lienzo;
+// restaurar es una edición más (se puede deshacer)
+let comparando = null;
+function miniatura(d) {
+  const capas = d.capas.filter((c) => c.visible !== false).map((c) => {
+    const anillos = c.anillos.map((a) => (Array.isArray(a[0]) ? a.map(nodo) : a));
+    return `<path fill="${c.op === 'unir' ? 'var(--laca)' : 'var(--fondo)'}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${nodosD(anillos, c.abierto)}"${c.trazo ? ` style="fill:none;stroke:${c.op === 'unir' ? 'var(--laca)' : 'var(--fondo)'};stroke-width:${({ ...TRAZO, ...c.trazo }).ancho / escalaCapa(c.t)}"` : ''}/>`;
+  }).join('');
+  return `<svg viewBox="-0.6 -0.6 1.2 1.2"><g transform="scale(1,-1)">${capas}</g></svg>`;
+}
+async function abrirHistorial() {
+  if (!nombreValido()) return;
+  $('#nombreHistorial').textContent = nombre;
+  $('#listaHistorial').innerHTML = '<li>Cargando…</li>';  // sin la lista vieja mientras llega la nueva
+  $('#historial').hidden = false;
+  const r = await api(`/api/historial?s=${encodeURIComponent(nombre)}`);
+  if (r.error) return estado(r.error, true);
+  $('#listaHistorial').innerHTML = r.copias.length ? r.copias.map((c) => `<li data-archivo="${esc(c.archivo)}" class="${c.titulo ? 'nombrada' : ''}"><div class="mini"></div>
+    ${c.titulo ? `<b>${esc(c.titulo)}</b><br>` : ''}${esc(c.fecha)}
+    <div class="fila" style="padding:4px 0 0"><button data-hist="comparar">Comparar</button><button data-hist="restaurar">Restaurar</button></div></li>`).join('')
+    : '<li>Aún no hay copias: se hacen solas al guardar (como mucho una cada 30 s).</li>';
+  for (const li of $('#listaHistorial').querySelectorAll('li[data-archivo]')) {
+    api(`/api/copia?s=${encodeURIComponent(nombre)}&f=${encodeURIComponent(li.dataset.archivo)}`).then((c) => { if (!c.error) { li._doc = c.doc; li.querySelector('.mini').innerHTML = miniatura(c.doc); } });
+  }
+}
+$('#bHistorial').addEventListener('click', abrirHistorial);
+$('#bCerrarHistorial').addEventListener('click', () => { $('#historial').hidden = true; });
+$('#bQuitarComparar').addEventListener('click', () => { comparando = null; $('#bQuitarComparar').hidden = true; dibujar(); });
+$('#listaHistorial').addEventListener('click', async (e) => {
+  const li = e.target.closest('li[data-archivo]'), q = e.target.dataset.hist; if (!li || !q) return;
+  const copia = li._doc ?? (await api(`/api/copia?s=${encodeURIComponent(nombre)}&f=${encodeURIComponent(li.dataset.archivo)}`)).doc;
+  if (q === 'comparar') { comparando = copia; $('#bQuitarComparar').hidden = false; $('#historial').hidden = true; dibujar(); estado('Comparando: la copia en naranja sobre lo actual'); return; }
+  restaurar(copia);
+  $('#historial').hidden = true;
+});
+function restaurar(copia) {
+  doc = migrar(JSON.parse(JSON.stringify(copia)));
+  idSig = Math.max(idSig, ...doc.capas.map((c) => c.id || 0), ...(doc.grupos ?? []).map((g) => g.id)) + 1;
+  for (const c of doc.capas) c.id ??= idSig++;
+  selec = []; nodos = false; nodoSel = null; comparando = null; $('#bQuitarComparar').hidden = true;
+  commit(); estado('Copia restaurada (⌘Z la deshace)');
+}
+async function guardarVersion() {
+  if (!nombreValido()) return;
+  const titulo = prompt('Nombre de la versión:', '');
+  if (titulo === null) return;
+  const r = await api('/api/version', { nombre, doc, titulo });
+  if (r.error) return estado(r.error, true);
+  estado(`Versión «${esc(titulo || 'version')}» guardada: no se borra nunca`);
+  if (!$('#historial').hidden) abrirHistorial();
+}
+$('#bVersion').addEventListener('click', guardarVersion);
 function programarGuardado() {
   if (!enServidor) return;
   clearTimeout(tGuardar);
@@ -2631,7 +2735,7 @@ $('#archivoSvg').addEventListener('change', async (e) => {
 });
 
 // para las pruebas de tests/: estado de solo lectura
-window.editor = { triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado, seleccion: () => selec, aplanar, redondear, svgDiseno, elegirNodos: (n) => { nodosMulti = capaSel().anillos[0].slice(0, n).map((_, i) => ({ k: 0, i })); nodoSel = nodosMulti[0]; sobre(); }, medidas: () => medida, evaluar };
+window.editor = { triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado, seleccion: () => selec, aplanar, redondear, svgDiseno, png, restaurar, elegirNodos: (n) => { nodosMulti = capaSel().anillos[0].slice(0, n).map((_, i) => ({ k: 0, i })); nodoSel = nodosMulti[0]; sobre(); }, medidas: () => medida, evaluar };
 
 const lista = await api('/api/simbolos');
 ajustesBase = lista.ajustes;

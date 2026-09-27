@@ -1046,6 +1046,40 @@ try {
     await s.close();
   }
 
+  // G9: versión con nombre (⌥⌘S), historial con miniaturas, comparar, restaurar (y
+  // deshacerlo), una copia de la versión 2 restaurada pasa por la migración, PNG 1× y 2×
+  {
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'xi-doble');
+    s.on('dialog', (d) => d.accept('Antes de mover'));
+    const docTxt = () => s.evaluate(() => JSON.stringify(window.editor.doc()));
+    await s.$eval('#nombre', (x) => { x.value = 'historia-ui'; });
+    await s.click('#bGuardar');
+    await s.waitForFunction(() => /Guardado/.test(document.querySelector('#estado').textContent), { timeout: 10000 });
+    const original = await docTxt();
+    await s.keyboard.down('Meta'); await s.keyboard.down('Alt'); await s.keyboard.press('KeyS'); await s.keyboard.up('Alt'); await s.keyboard.up('Meta');
+    await s.waitForFunction(() => /Versión/.test(document.querySelector('#estado').textContent), { timeout: 10000 });
+    await s.click('#capas li:first-child .nom');
+    for (let i = 0; i < 5; i++) await s.keyboard.press('ArrowRight');
+    const movido = await docTxt();
+    await s.click('#bHistorial');
+    await s.waitForFunction(() => document.querySelectorAll('#listaHistorial li.nombrada svg path').length > 0, { timeout: 10000 });
+    comprobar(/antes de mover/.test(await s.$eval('#listaHistorial li.nombrada', (x) => x.textContent)), 'el historial lista la versión con nombre, con su miniatura');
+    await s.click('#listaHistorial li.nombrada [data-hist="comparar"]');
+    comprobar(await s.$$eval('#lienzo .comparar', (l) => l.length) === 2, 'comparar pinta la copia sobre el lienzo');
+    await s.click('#bHistorial');
+    await s.waitForFunction(() => document.querySelectorAll('#listaHistorial li.nombrada svg path').length > 0, { timeout: 10000 });
+    await s.click('#listaHistorial li.nombrada [data-hist="restaurar"]');
+    comprobar(await docTxt() === original, 'restaurar deja el documento idéntico a la copia');
+    await s.keyboard.down('Meta'); await s.keyboard.press('z'); await s.keyboard.up('Meta');
+    comprobar(await docTxt() === movido, 'y ⌘Z vuelve a lo de antes de restaurar');
+    // una copia de la versión 2 (sin grupos) pasa por la migración al restaurarla
+    await s.evaluate(() => window.editor.restaurar({ ...window.editor.doc(), version: 2 }));
+    comprobar((await s.evaluate(() => window.editor.doc().version)) === 3, 'una copia de la versión 2 se restaura como versión 3');
+    const p1 = await s.evaluate(() => window.editor.png(1, false)), p2 = await s.evaluate(() => window.editor.png(2, false));
+    comprobar(p2.w === 2 * p1.w && p2.h === 2 * p1.h && p1.bytes > 1000, `el PNG a 2× mide el doble que a 1× (${p1.w}×${p1.h} → ${p2.w}×${p2.h})`);
+    await s.close();
+  }
+
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
   // shou-cruz se suelta con tres clics (conector, tallo y anillo)
   {
