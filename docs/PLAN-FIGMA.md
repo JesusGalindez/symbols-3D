@@ -171,6 +171,16 @@ riesgo (lista → árbol) y va cuando lo demás ya está entregado, como las cur
 necesitan imágenes no publicadas); `test:ui` entero en verde **sin internet**; la
 integración continua en verde en `main`; la memoria del deshacer medida y apuntada aquí.
 
+**Hecho el 2026-09-27** (faltan las dos tareas de usuario). El visor carga three.js de
+`vendor/` (con `meshopt_decoder.module.js`, sacado del paquete de npm de three 0.170: el
+CDN está bloqueado en la nube); `test_simetria_no_degrada…` se omite sin su imagen; el
+servidor rechaza campos desconocidos (`CAMPOS` en `tools/editor.py`, que cada fase amplía);
+integración continua en `.github/workflows/pruebas.yml`. **Memoria del deshacer:**
+`shou-circular` abierto como curvas ocupa 35 KB y `shou-cruz` cortado con las 40
+sugerencias 35 KB: 200 pasos ≈ 14 MB (UTF-16). Muy por debajo de 100 MB: se quedan las
+copias enteras. Medido: pytest 46 en verde (3 omitidas por imágenes no publicadas),
+`test:ui` entero en verde sin internet.
+
 **Tarea de usuario (20 min):** la de F6 (hecho si: el logotipo sale APROBADO) y el
 ejercicio de 15 minutos (hecho si: hay una lista de «me falta X» en este documento).
 

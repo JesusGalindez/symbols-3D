@@ -408,6 +408,8 @@ def test_simetria_generada_glb_simetrico(salida):
 
 def test_simetria_no_degrada_un_simbolo_simetrico(salida):
     """xi-doble se aprobó con --simetria-lr: rehecho desde su mitad izquierda sigue APROBADO."""
+    if not (RAIZ / "fuentes" / "xi-doble.png").exists():  # no se publica (marca de agua)
+        pytest.skip("falta xi-doble.png")
     doc, capas = capas_de("xi-doble")
     doc["simetria"] = {"lr": True, "x": -1}
     editor.generar("xi-mitad", doc, capas)
@@ -583,3 +585,14 @@ def test_exportar_svg_y_volver_a_importar():
                                    1 / vuelta["marco"]["s"] / 1000, origin=(0, 0))
     hecho = shapely.affinity.translate(hecho, *(esperado.centroid.coords[0][k] - hecho.centroid.coords[0][k] for k in (0, 1)))
     assert iou(hecho, esperado) > 0.999
+
+
+def test_campos_desconocidos_se_rechazan(salida):
+    """G0: un campo que este editor no conoce no se borra en silencio al guardar: se rechaza
+    y el error lo nombra."""
+    doc = editor.piezas_curvas("xi-doble")
+    doc["capas"][0]["inventado"] = 1
+    doc["capas"][1]["anillos"][0][0]["otro"] = 2
+    with pytest.raises(ValueError, match="capa.inventado, nodo.otro"):
+        editor.guardar("con-campos-raros", doc)
+    assert not (salida / "editor" / "con-campos-raros.json").exists()

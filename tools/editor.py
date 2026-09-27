@@ -506,7 +506,31 @@ def previa(doc, capas):
         return (Path(d) / "glb" / "previa.glb").read_bytes()
 
 
+# Campos que conoce este editor. Lo que no esté aquí se rechaza al guardar y al generar:
+# un editor anterior que ignorase un campo nuevo (p. ej. un trazo) lo borraría en silencio
+# al guardar.
+CAMPOS = {
+    "doc": {"version", "origen", "capas", "ajustes", "simetria"},
+    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras"},
+    "nodo": {"p", "ent", "sal", "tipo"},
+}
+
+
+def validar(doc):
+    """ValueError con los campos desconocidos del documento, si los hay."""
+    raros = set(doc) - CAMPOS["doc"]
+    for c in doc.get("capas", []):
+        raros |= {f"capa.{k}" for k in set(c) - CAMPOS["capa"]}
+        for a in c.get("anillos", []) if isinstance(c.get("anillos"), list) else []:
+            for n in a:
+                if isinstance(n, dict):
+                    raros |= {f"nodo.{k}" for k in set(n) - CAMPOS["nodo"]}
+    if raros:
+        raise ValueError(f"campos que este editor no conoce: {', '.join(sorted(raros))}")
+
+
 def guardar(nombre, doc):
+    validar(doc)
     if protegido(nombre):
         raise ValueError(f"{nombre} es un símbolo que no salió del editor: elige otro nombre")
     texto = json.dumps(doc, ensure_ascii=False)
