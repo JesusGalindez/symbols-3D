@@ -173,6 +173,71 @@ try {
     await s.close();
   }
 
+  // precisión de la cuchilla (shou-cruz): imán a los bordes rectos, recta al arrastrar y
+  // Mayús para ángulos de 15°
+  {
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'shou-cruz');
+    const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+    await s.keyboard.press('k');
+    await s.waitForFunction(() => window.editor.bordes().length > 0, { timeout: 10000 });
+    // el borde inferior de la barra derecha (x de 0,06 a 0,30): en el conector (x = 0,34),
+    // 3 px por encima de su prolongación, el punto cae exactamente en ella
+    const borde = await s.evaluate(() => window.editor.bordes().find(([a, b]) => Math.abs(a[1] - b[1]) < 1e-9 && a[1] > 0.03 && a[1] < 0.05 && Math.min(a[0], b[0]) > 0.05 && Math.max(a[0], b[0]) < 0.31));
+    const [bx, by] = await cli(0.34, borde[0][1]);
+    await s.mouse.move(bx, by - 3);  // 3 px por encima
+    const marca = await s.evaluate(() => window.editor.marca());
+    comprobar(marca && Math.abs(marca.p[1] - borde[0][1]) < 1e-12, `el imán deja el punto sobre la recta del borde (${marca?.p[1]} = ${borde[0][1]})`);
+    // arrastre tembloroso de arriba abajo del anillo: la costura es una recta de 2 puntos
+    const [x0, y0] = await cli(0, 0.56), [x1, y1] = await cli(0, 0.38);
+    await s.mouse.move(x0, y0); await s.mouse.down();
+    for (let i = 1; i <= 10; i++) await s.mouse.move(x0 + (i % 2 ? 6 : -6), y0 + (y1 - y0) * i / 10);
+    await s.mouse.move(x1, y1); await s.mouse.up();
+    await s.waitForFunction(() => window.editor.doc().capas[0].costuras?.length === 1, { timeout: 10000 });
+    comprobar((await s.evaluate(() => window.editor.doc().capas[0].costuras[0].length)) === 2, 'arrastrar traza una recta de 2 puntos aunque la mano tiemble');
+    // con Mayús, un arrastre algo torcido sale vertical exacto
+    const [x2, y2] = await cli(0.005, -0.56), [x3, y3] = await cli(0.022, -0.38);  // 6° de la vertical (< 7,5°)
+    let enviada = null;
+    s.on('request', (r) => { if (r.url().endsWith('/api/cortar')) enviada = JSON.parse(r.postData()).linea; });
+    await s.mouse.move(x2, y2); await s.keyboard.down('Shift'); await s.mouse.down();
+    await s.mouse.move(x3, y3, { steps: 6 }); await s.mouse.up(); await s.keyboard.up('Shift');
+    await s.waitForFunction(() => window.editor.doc().capas.length === 2, { timeout: 10000 });
+    comprobar(enviada?.length === 2 && enviada[0][0] === enviada[1][0], `con Mayús, un arrastre algo torcido sale vertical exacto (x ${enviada?.map((q) => q[0]).join(' = ')})`);
+    comprobar(true, 'y con la costura de arriba separa las dos mitades');
+    await s.close();
+  }
+
+  // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de
+  // shou-cruz se suelta con tres clics (conector, tallo y anillo)
+  {
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'shou-cruz');
+    await s.keyboard.press('k');
+    await s.waitForFunction(() => document.querySelectorAll('#sobre .sugerencia').length > 0, { timeout: 10000 });
+    comprobar(await s.$$eval('#sobre .sugerencia', (l) => l.length) === 40, 'al pulsar K se ven las 40 uniones sugeridas');
+    const clicEnSugerencia = async (x, y) => {  // la sugerencia más cercana a (x, y) del mundo
+      const [cx, cy] = await s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+      const punto = await s.$$eval('#sobre .sugerencia-toque', (ls, [cx, cy]) => {
+        const r = document.querySelector('#sobre').getBoundingClientRect();
+        const m = ls.map((l) => [r.left + (+l.getAttribute('x1') + +l.getAttribute('x2')) / 2, r.top + (+l.getAttribute('y1') + +l.getAttribute('y2')) / 2]);
+        return m.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cy) - Math.hypot(b[0] - cx, b[1] - cy))[0];
+      }, [cx, cy]);
+      const antes = await s.evaluate(() => JSON.stringify(window.editor.doc()));
+      await s.mouse.click(...punto);
+      await s.waitForFunction((a) => JSON.stringify(window.editor.doc()) !== a, { timeout: 10000 }, antes);
+      await s.waitForFunction(() => document.querySelectorAll('#sobre .sugerencia').length > 0, { timeout: 10000 });
+    };
+    await clicEnSugerencia(0.34, 0.042);   // conector
+    await clicEnSugerencia(0.12, 0.079);   // tallo
+    await clicEnSugerencia(0.444, 0.109);  // anillo
+    const areas = await s.evaluate(() => window.editor.doc().capas.map((c) => {
+      let d = 0; const a = c.anillos[0];
+      for (let i = 0; i < a.length; i++) { const p = a[i], q = a[(i + 1) % a.length]; d += p[0] * q[1] - q[0] * p[1]; }
+      return Math.abs(d / 2) * Math.abs(c.t.sx * c.t.sy);
+    }));
+    comprobar(areas.some((a) => Math.abs(a - 0.0253) < 5e-4), `tres clics sueltan la barra (${areas.map((a) => a.toFixed(4)).join(', ')})`);
+    comprobar(await s.$eval('[data-herr="cuchilla"]', (b) => b.classList.contains('activo')), 'la cuchilla sigue activa entre clics');
+    await s.close();
+  }
+
   // zoom con pellizco (⌃ + rueda): durante el gesto el lienzo va escalado por CSS; tiene
   // que coincidir con lo que se redibuja al acabar, y el punto bajo el cursor no se mueve
   const cajaCapa = () => p.$eval('#lienzo path.capa', (el) => { const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; });

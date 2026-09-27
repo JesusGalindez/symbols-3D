@@ -111,13 +111,124 @@ def cortar(capas, linea):
         if nueva.intersection(forma).length < 1e-4:
             continue  # la línea nueva no pasa por esta capa
         lineas = [nueva, *(alargar(k, forma) for k in c.get("costuras", []))]
-        caras = [f for f in polygonize(unary_union([forma.boundary, *lineas]))
-                 if f.area > 1e-7 and forma.contains(f.representative_point())]
+        caras = sin_astillas([f for f in polygonize(unary_union([forma.boundary, *lineas]))
+                              if f.area > 1e-7 and forma.contains(f.representative_point())])
         if len(caras) > len(s.lista(forma)):
-            cortes.append({"id": c["id"], "piezas": a_listas(MultiPolygon(caras))})
+            # sin redondear: un corte que roza de forma tangente el redondeo de una esquina
+            # deja un canal casi sin anchura, y redondear (a 6 o a 9 decimales) lo cruzaba
+            # consigo mismo (pieza inválida). El documento guarda coordenadas completas igual
+            cortes.append({"id": c["id"], "piezas": a_listas(MultiPolygon(caras), None)})
         else:
             atraviesa.append(c["id"])
     return {"cortes": cortes, "atraviesa": atraviesa}
+
+
+def sin_astillas(caras, minima=1e-4):
+    """Un trozo de menos de `minima` (1 % × 1 % del diámetro) no merece ser una capa: se
+    funde con la vecina con la que comparte más borde. Sale al cortar una misma unión por
+    sus dos lados, que se cruzan en el redondeo de la esquina (shou-cruz: 0,006 × 0,006).
+    El borde común es exacto, así que la fusión no deja rendija."""
+    caras = list(caras)
+    while len(caras) > 1:
+        chica = min(caras, key=lambda f: f.area)
+        if chica.area >= minima:
+            break
+        otras = [f for f in caras if f is not chica]
+        vecina = max(otras, key=lambda f: chica.boundary.intersection(f.boundary).length)
+        if chica.boundary.intersection(vecina.boundary).length == 0:
+            break  # suelta de verdad (no toca a nadie): se deja
+        caras = [f for f in otras if f is not vecina] + [unary_union([vecina, chica])]
+    return caras
+
+
+def tramos_rectos(anillo, largo_min):
+    """Bordes rectos de un anillo: segmentos seguidos con la misma dirección (< 1°)."""
+    pts = list(anillo.coords)[:-1]
+    n = len(pts)
+    ang = lambda a, b: math.atan2(b[1] - a[1], b[0] - a[0])
+    segs = [(pts[i], pts[(i + 1) % n]) for i in range(n)]
+    tramos, i = [], 0
+    while i < n:
+        a, b = segs[i]
+        j = i
+        while j + 1 < n and abs((ang(*segs[j + 1]) - ang(a, b) + math.pi) % (2 * math.pi) - math.pi) < math.radians(1):
+            j += 1
+        if math.dist(a, segs[j][1]) >= largo_min:
+            tramos.append((a, segs[j][1]))
+        i = j + 1
+    return tramos
+
+
+def sugerencias(capas, largo_min=0.03, max_corte=0.12, paralelos=0.02):
+    """Cortes propuestos para la cuchilla: una unión en T es justo donde el borde recto de
+    un trazo, prolongado, atraviesa el otro. Se prolonga cada borde (≥ largo_min) desde sus
+    extremos por dentro del material hasta que sale (≤ max_corte). Sondeo 2026-09-26: en
+    shou-cruz los 40 caen en uniones reales. Dos casi paralelos a < `paralelos` (bordes de
+    trazos distintos casi alineados) dejarían una astilla entre ellos: se funden en uno."""
+    cortes = []
+    for c in capas:
+        forma = forma_capa(c["anillos"])
+        propios = []
+        for p in s.lista(forma):
+            for anillo in [p.exterior, *p.interiors]:
+                for a, b in tramos_rectos(anillo, largo_min):
+                    L = math.dist(a, b)
+                    d = ((b[0] - a[0]) / L, (b[1] - a[1]) / L)
+                    for o, u in ((b, d), (a, (-d[0], -d[1]))):
+                        corte = prolongar(forma, o, u, max_corte)
+                        if corte and not any(min(math.dist(o, k[0]) + math.dist(corte, k[1]),
+                                                 math.dist(o, k[1]) + math.dist(corte, k[0])) < 0.008 for k in propios):
+                            propios.append((o, corte))
+        cortes += fundir_paralelos(propios, paralelos)
+    # un poco más largos por los dos lados: el corte tiene que cruzar el borde con holgura
+    largo = lambda a, b, e: (b[0] + (b[0] - a[0]) / math.dist(a, b) * e, b[1] + (b[1] - a[1]) / math.dist(a, b) * e)
+    return [[list(largo(b, a, 2e-4)), list(largo(a, b, 2e-4))] for a, b in cortes]
+
+
+def bordes_rectos(capas, largo_min=0.015):
+    """Bordes rectos de las capas: el imán de la cuchilla engancha a sus extremos, a ellos
+    mismos y a sus prolongaciones (por donde pasa un corte limpio de una unión)."""
+    return [[list(a), list(b)] for c in capas for p in s.lista(forma_capa(c["anillos"]))
+            for anillo in [p.exterior, *p.interiors] for a, b in tramos_rectos(anillo, largo_min)]
+
+
+def prolongar(forma, o, u, max_corte):
+    """Desde o (extremo de un borde) en la dirección u: si entra en el material y vuelve a
+    salir antes de max_corte, devuelve el punto de salida. El arco de redondeo de las
+    esquinas que entran es tangente al borde: la prolongación roza el contorno al empezar,
+    así que se mira el tramo de intersección que arranca en o, no un punto cercano."""
+    rayo = LineString([o, (o[0] + u[0] * max_corte, o[1] + u[1] * max_corte)])
+    inter = rayo.intersection(forma)
+    for g in getattr(inter, "geoms", [inter]):
+        if g.geom_type != "LineString" or g.length <= 0.005:
+            continue
+        ini, fin = g.coords[0], g.coords[-1]
+        if math.dist(ini, o) < 1e-6 and g.length < max_corte - 1e-4:
+            return fin
+    return None
+
+
+def fundir_paralelos(cortes, distancia):
+    """Pares casi paralelos (< 5°), solapados y a < distancia: uno solo, por el medio."""
+    cortes = list(cortes)
+    i = 0
+    while i < len(cortes):
+        a, b = cortes[i]
+        ua = ((b[0] - a[0]) / math.dist(a, b), (b[1] - a[1]) / math.dist(a, b))
+        for j in range(i + 1, len(cortes)):
+            c, d = cortes[j]
+            if abs(ua[0] * (d[0] - c[0]) + ua[1] * (d[1] - c[1])) < math.dist(c, d) * math.cos(math.radians(5)):
+                continue  # no son paralelos
+            if (d[0] - c[0]) * ua[0] + (d[1] - c[1]) * ua[1] < 0:
+                c, d = d, c  # misma orientación
+            if LineString([a, b]).distance(LineString([c, d])) >= distancia:
+                continue
+            cortes[i] = (((a[0] + c[0]) / 2, (a[1] + c[1]) / 2), ((b[0] + d[0]) / 2, (b[1] + d[1]) / 2))
+            del cortes[j]
+            break
+        else:
+            i += 1
+    return cortes
 
 
 def alargar(linea, forma, hasta=0.15):
@@ -146,9 +257,10 @@ def alargar(linea, forma, hasta=0.15):
     return LineString(pts)
 
 
-def a_listas(geo):
-    """Multipolígono de shapely -> [[exterior, hueco...], ...] (anillos cerrados, como GeoJSON)."""
-    r = lambda a: [[round(x, 6), round(y, 6)] for x, y in a.coords]
+def a_listas(geo, decimales=6):
+    """Multipolígono de shapely -> [[exterior, hueco...], ...] (anillos cerrados, como GeoJSON).
+    decimales=None: sin redondear (piezas de un corte: ver cortar())."""
+    r = lambda a: [[round(x, decimales), round(y, decimales)] if decimales else [x, y] for x, y in a.coords]
     return [[r(p.exterior), *map(r, p.interiors)] for p in s.lista(geo) if not p.is_empty]
 
 
@@ -246,6 +358,11 @@ class Manejador(SimpleHTTPRequestHandler):
             except Exception as e:  # geometría imposible a mitad de edición: se dice, no se cae
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
             return self.responder({"resultado": a_listas(geo)})
+        if self.path == "/api/sugerencias":
+            try:
+                return self.responder({"sugerencias": sugerencias(datos["capas"]), "bordes": bordes_rectos(datos["capas"])})
+            except Exception as e:
+                return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
         if self.path == "/api/cortar":
             try:
                 return self.responder(cortar(datos["capas"], datos["linea"]))

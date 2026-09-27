@@ -223,9 +223,34 @@ que salen (≤ 0,12): una unión en T es justo donde el borde de un trazo atravi
   16/40, 27/31) que dejarían una astilla entre ellos.
 - Aplicarlos todos a la vez da ~100 fragmentos (cada cruce, un cuadrado suelto): para
   mover un trazo habría que seleccionar varios (F3) y no hay «combinar capas».
-- **Decisión pendiente del usuario.** Recomendación: no «separar todo» de golpe, sino
-  mostrar los cortes propuestos como sugerencias en modo cuchilla y aplicar el que se
-  pulse; los pares casi paralelos se funden en uno.
+- **Decidido (usuario, opción A): sugerencias en la cuchilla**, no «separar todo».
+
+**Sugerencias de corte (hecho 2026-09-26).** `/api/sugerencias` (0,04–0,13 s) al entrar
+en la cuchilla y tras cada cambio; líneas azules, clic = ese corte; la cuchilla sigue
+activa entre cortes (Esc vuelve a Mover). Pares casi paralelos fundidos: en `xi-doble`
+eran 4, no 3 (el sondeo contó 27/31 como uno y eran 27/6 y 31/14): 56 → 52.
+- **Astillas:** cortar una unión por sus dos lados deja un cuadradito en el redondeo de la
+  esquina (0,006 × 0,006); un trozo de < 1e-4 se funde con su vecina.
+- **Piezas del corte sin redondear:** un corte tangente al redondeo de una esquina deja un
+  canal casi sin anchura y redondear a 6 (o 9) decimales lo cruzaba consigo mismo (pieza
+  inválida, pegada al resto por un punto). Ahora se envían con precisión completa.
+- Criterios: aplicar las 40 sugerencias de `shou-cruz` → piezas válidas y APROBADO sin
+  mover nada; la barra superior derecha se suelta con 3 clics (también en la interfaz).
+
+**Cortes precisos (hecho 2026-09-26, pedido del usuario: «esta manera de cortar no es precisa»).**
+- Arrastrar traza una **recta** (de donde se pulsa a donde se suelta), no a mano alzada.
+- **Imán** con guías rosas: extremos de los bordes rectos (8 px) > cruce de dos rectas
+  (8 px) > una recta (6 px); rectas = bordes rectos (`bordes_rectos`, junto con las
+  sugerencias), sus prolongaciones y los ejes. ⌘ lo apaga. Cada borde guía solo hasta
+  0,15 más allá de sus extremos: prolongados sin límite, cruces de bordes lejanos salían
+  por todo el lienzo y ganaban al eje (medido: un punto junto al eje enganchaba al cruce
+  de dos diagonales de la otra punta del símbolo).
+- **Mayús**: ángulo en múltiplos de 15° desde el punto anterior; `cos(90°)` da 6e-17, se
+  redondea a 0 para que la vertical sea exacta.
+- Clic en una sugerencia la aplica; arrastrar empezando encima traza una línea propia.
+  Esc cancela la línea sin salir de la cuchilla.
+- Parte de F2 queda adelantada aquí (imán y guías para la cuchilla); F2 lo extenderá a
+  mover capas y nodos reutilizando `iman()`.
 
 ---
 

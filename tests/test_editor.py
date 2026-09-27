@@ -3,12 +3,14 @@
 Todo se escribe en carpetas temporales (tmp_path): glb/, svg/ y editor/ no se tocan.
 """
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 import trimesh
+from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -226,3 +228,98 @@ def test_costuras_se_suman_hasta_separar(salida):
     editor.generar("mitades", doc, capas)
     codigo, v = verificar(salida / "glb" / "mitades.glb", RAIZ / "fuentes" / "shou-cruz.png")
     assert codigo == 0 and v["aprobado"], v
+
+
+# ---------- sugerencias de corte
+
+def capas_de(nombre):
+    doc = editor.piezas_svg(nombre)
+    return doc, [{**c, "id": i + 1} for i, c in enumerate(en_mundo(doc))]
+
+
+def aplicar(capas, linea, sig):
+    """Lo que hace el navegador con la respuesta de /api/cortar: costuras y piezas nuevas."""
+    r = editor.cortar(capas, linea)
+    for id_ in r["atraviesa"]:
+        c = next(c for c in capas if c["id"] == id_)
+        c["costuras"] = [*c.get("costuras", []), linea]
+    for corte in r["cortes"]:
+        i = next(k for k, c in enumerate(capas) if c["id"] == corte["id"])
+        capas[i:i + 1] = [{"id": next(sig), "op": capas[i]["op"], "anillos": p} for p in corte["piezas"]]
+    return r
+
+
+def test_sugerencias_de_shou_cruz_caen_en_el_material():
+    _, capas = capas_de("shou-cruz")
+    sug = editor.sugerencias(capas)
+    assert len(sug) == 40  # sondeo 2026-09-26: las 40 en uniones reales
+    for linea in sug:  # cada una, sola, corta o queda como costura: nunca «no pasa por nada»
+        r = editor.cortar(capas, linea)
+        assert r["cortes"] or r["atraviesa"]
+
+
+def test_aplicar_todas_las_sugerencias_sigue_aprobado(salida):
+    """Todas las sugerencias, una tras otra (con costuras): piezas válidas, y el símbolo
+    generado sin mover nada sigue APROBADO."""
+    import itertools
+    doc, capas = capas_de("shou-cruz")
+    sig = itertools.count(100)
+    for linea in editor.sugerencias(capas):
+        aplicar(capas, linea, sig)
+    assert len(capas) >= 20
+    assert all(Polygon(c["anillos"][0], c["anillos"][1:]).is_valid for c in capas)
+    editor.generar("sugerida", doc, capas)
+    codigo, v = verificar(salida / "glb" / "sugerida.glb", RAIZ / "fuentes" / "shou-cruz.png")
+    assert codigo == 0 and v["aprobado"], v
+
+
+def test_soltar_una_barra_con_tres_clics():
+    """La tarea de usuario de F1 con sugerencias: la barra superior derecha de shou-cruz
+    se suelta con las 3 de sus uniones (conector, tallo y anillo)."""
+    import itertools
+    _, capas = capas_de("shou-cruz")
+    medio = lambda s: ((s[0][0] + s[1][0]) / 2, (s[0][1] + s[1][1]) / 2)
+    suyas = [s for s in editor.sugerencias(capas) if 0.02 < medio(s)[1] < 0.14 and medio(s)[0] > 0.05][:3]
+    sig = itertools.count(100)
+    for linea in suyas:
+        aplicar(capas, linea, sig)
+    areas = sorted(editor.forma_capa(c["anillos"]).area for c in capas)
+    assert any(abs(a - 0.0253) < 5e-4 for a in areas), areas
+
+
+def test_pares_casi_paralelos_se_funden():
+    """xi-doble: 4 pares de bordes casi alineados (a ~0,015) dejaban una astilla entre sus
+    dos cortes; se funden en uno por el medio (56 → 52)."""
+    _, capas = capas_de("xi-doble")
+    sug = editor.sugerencias(capas)
+    assert len(sug) == 52
+    for i, a in enumerate(sug):
+        for b in sug[i + 1:]:
+            la, lb = LineString(a), LineString(b)
+            ua = ((a[1][0] - a[0][0]) / la.length, (a[1][1] - a[0][1]) / la.length)
+            paralelas = abs(ua[0] * (b[1][0] - b[0][0]) + ua[1] * (b[1][1] - b[0][1])) >= lb.length * 0.996
+            assert not (paralelas and la.distance(lb) < 0.02)
+
+
+def test_astilla_se_funde_con_su_vecina():
+    """Dos cortes que se cruzan junto a una esquina dejan un cuadradito (aquí 0,005 × 0,005,
+    como el de shou-cruz): no es una capa, se funde con su vecina. Las tiras de 0,005 ×
+    0,595 sí quedan (0,003 de área, por encima del umbral de 1e-4)."""
+    cuadro = [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]]
+    capas = [{"id": 1, "op": "unir", "anillos": [cuadro], "costuras": [[[0.295, 0.4], [0.295, -0.4]]]}]
+    (corte,) = editor.cortar(capas, [[-0.4, 0.295], [0.4, 0.295]])["cortes"]
+    areas = [Polygon(p[0], p[1:]).area for p in corte["piezas"]]
+    assert len(areas) == 3 and min(areas) > 1e-4, areas
+    assert abs(sum(areas) - 0.36) < 1e-12
+
+
+def test_bordes_rectos_para_el_iman():
+    """Los bordes rectos que usa el imán de la cuchilla: los de las barras, exactos; y ningún
+    arco del anillo de shou-cruz pasa por recto (1° de tolerancia da tramos < 0,015)."""
+    _, capas = capas_de("shou-cruz")
+    bordes = editor.bordes_rectos(capas)
+    assert len(bordes) > 100
+    assert [[0.29894, 0.04164], [0.06227, 0.04164]] in [[[round(v, 5) for v in q] for q in b] for b in bordes]
+    radio = lambda q: math.hypot(*q)
+    assert not any(radio(a) > 0.45 and radio(b) > 0.45 and abs(radio(a) - radio(b)) < 1e-3 and math.dist(a, b) > 0.02
+                   for a, b in bordes)  # ninguna «recta» sobre el anillo exterior

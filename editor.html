@@ -64,6 +64,11 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #sobre .dibujo{fill:rgba(13,153,255,.12);stroke:var(--acento);pointer-events:none}
 #sobre .corte{fill:none;stroke:#ff5a5a;stroke-width:1.5;stroke-dasharray:6 4;pointer-events:none}
 #sobre .corte-punto{fill:#ff5a5a;pointer-events:none}
+#sobre .sugerencia{stroke:#a8dcff;stroke-width:2;opacity:.85;pointer-events:none}
+#sobre .sugerencia-toque{stroke:transparent;stroke-width:12;pointer-events:stroke;cursor:pointer}
+#sobre .sugerencia-toque:hover+.sugerencia{stroke:#fff;opacity:1;stroke-width:3.5}
+#sobre .guia-iman{stroke:#ff4fa3;stroke-width:1;stroke-dasharray:4 3;pointer-events:none}
+#sobre .punto-iman{fill:none;stroke:#ff4fa3;stroke-width:1.5;pointer-events:none}
 #lienzo .costura,#flotante .costura{fill:none;stroke:#ff5a5a;stroke-width:1.5;stroke-dasharray:5 4;pointer-events:none}
 #lienzo.herr-rect,#lienzo.herr-elipse,#lienzo.herr-cuchilla{cursor:crosshair}
 #lienzo.herr-rect .capa,#lienzo.herr-elipse .capa,#lienzo.herr-cuchilla .capa{cursor:crosshair}
@@ -85,7 +90,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <button data-herr="mover" title="Mover (V)">↖ Mover</button>
     <button data-herr="rect" title="Rectángulo (R)">▭ Rect</button>
     <button data-herr="elipse" title="Elipse (O)">◯ Elipse</button>
-    <button data-herr="cuchilla" title="Cortar (K): arrastra de lado a lado de un trazo, o clic por punto y doble clic o Enter para terminar; Esc cancela">✂ Cortar</button>
+    <button data-herr="cuchilla" title="Cortar (K): clic en una línea azul, o arrastra una recta de lado a lado (imán a bordes y esquinas; Mayús = ángulos de 15°; ⌘ sin imán)">✂ Cortar</button>
     <button id="bNodos" title="Editar nodos (Enter o doble clic)">⬩ Nodos</button>
     <span class="sep"></span>
     <button id="bDeshacer" title="Deshacer (⌘Z)">↶</button>
@@ -284,6 +289,23 @@ function sobre() {
       q.forEach(([x, y], k) => { html += `<rect class="asa" data-asa="${k}" x="${x - 4}" y="${y - 4}" width="8" height="8"/>`; });
     }
   }
+  if (herramienta === 'cuchilla' && sugeridas && !cuchilla?.puntos.length) {
+    // cada sugerencia: una franja ancha e invisible para acertar el clic y la línea visible
+    html += sugeridas.map(([a, b], i) => {
+      const [x0, y0] = aPantalla(a), [x1, y1] = aPantalla(b);
+      return `<line class="sugerencia-toque" data-sugerencia="${i}" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"/>` +
+        `<line class="sugerencia" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"/>`;
+    }).join('');
+  }
+  if (herramienta === 'cuchilla' && marcaIman) {
+    for (const r of marcaIman.guias) {
+      const k0 = Math.max(r.k0, -5), k1 = Math.min(r.k1, 5);  // el borde y su alcance; los ejes, a lo largo de la vista
+      const [x0, y0] = aPantalla([r.o[0] + r.u[0] * k0, r.o[1] + r.u[1] * k0]), [x1, y1] = aPantalla([r.o[0] + r.u[0] * k1, r.o[1] + r.u[1] * k1]);
+      html += `<line class="guia-iman" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"/>`;
+    }
+    const [x, y] = aPantalla(marcaIman.p);
+    html += `<rect class="punto-iman" x="${x - 4}" y="${y - 4}" width="8" height="8"/>`;
+  }
   if (herramienta === 'cuchilla' && cuchilla?.puntos.length) {
     const pts = [...cuchilla.puntos, cuchilla.cursor].map(aPantalla);
     html += `<polyline class="corte" points="${pts.map((q) => q.join(',')).join(' ')}"/>` +
@@ -420,6 +442,7 @@ function commit() {
     cambioGeo();
     if (!enServidor && s !== guardado) guardar(true);  // la primera edición ya queda a salvo
     else programarGuardado();
+    if (herramienta === 'cuchilla') pedirSugerencias();
   }
   todo();
 }
@@ -428,6 +451,7 @@ function irA(i) {
   puntero = i; doc = JSON.parse(historia[i]);
   if (!capaSel()) { sel = null; nodos = false; }
   nodoSel = null; cambioGeo(); programarGuardado(); todo();
+  if (herramienta === 'cuchilla') pedirSugerencias();
 }
 function todo() {
   dibujar(); capasUI(); panel();
@@ -444,9 +468,10 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   if (e.button === 1 || espacio) { empezarGesto(); arrastre = { tipo: 'pan', x: e.clientX, y: e.clientY, cx: vista.cx, cy: vista.cy }; return; }
   if (e.button !== 0) return;
   if (herramienta === 'cuchilla') {
-    cuchilla ??= { puntos: [], cursor: m };
-    cuchilla.puntos.push(m); cuchilla.cursor = m;
-    cuchilla.pulsado = { x: e.clientX, y: e.clientY };  // si se arrastra, es a mano alzada
+    const { p } = iman(m, cuchilla?.puntos.at(-1) ?? null, e);
+    if (cuchilla) { cuchilla.puntos.push(p); cuchilla.cursor = p; }
+    // al empezar: si se arrastra es una recta; si es un clic sobre una línea azul, esa sugerencia
+    else cuchilla = { puntos: [p], cursor: p, nuevo: { x: e.clientX, y: e.clientY, sugerencia: el.dataset.sugerencia } };
     sobre();
     return;
   }
@@ -475,14 +500,13 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
   todo();
 });
 addEventListener('pointermove', (e) => {
-  if (cuchilla && !arrastre) {
-    const m = deEvento(e), P = cuchilla.pulsado;
-    if (P && !cuchilla.aMano && Math.hypot(e.clientX - P.x, e.clientY - P.y) > 4) cuchilla.aMano = true;
-    if (cuchilla.aMano) {  // un punto cada 3 px de pantalla
-      const u = cuchilla.puntos.at(-1);
-      if (Math.hypot(m[0] - u[0], m[1] - u[1]) * vista.zoom >= 3) cuchilla.puntos.push(m);
-    }
-    cuchilla.cursor = m; sobre(); return;
+  if (herramienta === 'cuchilla' && !arrastre) {
+    const N = cuchilla?.nuevo;
+    if (N && !N.recta && Math.hypot(e.clientX - N.x, e.clientY - N.y) > 4) N.recta = true;
+    const { p, marca } = iman(deEvento(e), cuchilla?.puntos.at(-1) ?? null, e);
+    marcaIman = marca;
+    if (cuchilla) cuchilla.cursor = p;
+    sobre(); return;
   }
   if (!arrastre) return;
   const m = deEvento(e), c = capaSel(), A = arrastre;
@@ -527,9 +551,10 @@ function pedirPanel() {
   requestAnimationFrame(() => { panelPendiente = false; panel(); });
 }
 addEventListener('pointerup', (e) => {
-  if (cuchilla?.pulsado) {
-    cuchilla.pulsado = null;
-    if (cuchilla.aMano) { cuchilla.puntos.push(deEvento(e)); terminarCorte(); }  // a mano alzada: corta al soltar
+  if (cuchilla?.nuevo) {
+    const N = cuchilla.nuevo; cuchilla.nuevo = null;
+    if (N.recta) { cuchilla.puntos.push(cuchilla.cursor); terminarCorte(); }  // arrastre: recta de donde se pulsó a donde se suelta
+    else if (N.sugerencia !== undefined) { cuchilla = { puntos: sugeridas[Number(N.sugerencia)] }; terminarCorte(); }
     return;
   }
   const A = arrastre; arrastre = null;
@@ -620,7 +645,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'k') herr('cuchilla');
   else if (e.key === 'Enter' && cuchilla) terminarCorte();
   else if (e.key === 'Enter' && c) { nodos = !nodos; nodoSel = null; todo(); }
-  else if (e.key === 'Escape' && cuchilla) { cuchilla = null; herramienta = 'mover'; todo(); }
+  else if (e.key === 'Escape' && cuchilla) { cuchilla = null; sobre(); }  // cancela la línea; otra vez Esc, a Mover
   else if (e.key === 'Escape') { if (nodos) nodos = false; else sel = null; nodoSel = null; herramienta = 'mover'; todo(); }
   else if ((e.key === 'Delete' || e.key === 'Backspace') && c) { e.preventDefault(); nodos && nodoSel ? borrarNodo() : borrarCapa(); }
   else if (e.key.startsWith('Arrow') && c) {
@@ -637,8 +662,77 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => { if (e.code === 'Space') { espacio = false; lienzo.classList.remove('pan'); } });
 
 function herr(h) {
-  herramienta = h; cuchilla = null; if (h !== 'mover') nodos = false; todo();
-  if (h === 'cuchilla') estado('Cuchilla: arrastra de lado a lado de un trazo, o clic por punto y doble clic para terminar · Esc cancela');
+  herramienta = h; cuchilla = null; marcaIman = null; if (h !== 'mover') nodos = false; todo();
+  if (h === 'cuchilla') {
+    estado('Cuchilla: clic en una línea azul, o arrastra una recta de lado a lado (imán a bordes y esquinas · Mayús: 15° · ⌘: sin imán) · Esc para salir');
+    pedirSugerencias();
+  }
+}
+
+// Sugerencias de corte (servidor: bordes rectos prolongados por dentro del material hasta
+// que salen, es decir, las uniones en T). Se piden al entrar en la cuchilla y tras cada
+// corte; una respuesta vieja se descarta.
+let sugeridas = null, peticionSug = 0, bordes = [], marcaIman = null;
+
+// Imán de la cuchilla. Engancha, por orden: extremos de los bordes rectos (8 px), el cruce
+// de dos rectas (8 px) y una recta (6 px); rectas = los bordes rectos, sus prolongaciones
+// (por donde pasa un corte limpio de una unión) y los ejes. Cada borde guía solo hasta
+// ALCANCE más allá de sus extremos: prolongados sin límite, los cruces de bordes lejanos
+// salían por todo el lienzo y ganaban a guías con sentido (medido en shou-cruz). Con Mayús, el ángulo desde el
+// punto anterior va en múltiplos de 15° y el imán busca a lo largo de ese rayo. ⌘ lo apaga.
+// Devuelve el punto y lo que se dibuja en rosa (el punto y sus guías).
+const ALCANCE = 0.15;  // el mismo que max_corte de las sugerencias: lo que cruza una unión
+const EJES = [{ o: [0, 0], u: [1, 0], k0: -Infinity, k1: Infinity }, { o: [0, 0], u: [0, 1], k0: -Infinity, k1: Infinity }];
+function recta([a, b]) {
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  return { o: a, u: [(b[0] - a[0]) / L, (b[1] - a[1]) / L], k0: -ALCANCE, k1: L + ALCANCE };
+}
+const enAlcance = (p, r) => { const k = (p[0] - r.o[0]) * r.u[0] + (p[1] - r.o[1]) * r.u[1]; return k >= r.k0 && k <= r.k1; };
+const distRecta = (p, r) => (enAlcance(p, r) ? Math.abs((p[0] - r.o[0]) * r.u[1] - (p[1] - r.o[1]) * r.u[0]) : Infinity);
+function proyectar(p, r) { const k = (p[0] - r.o[0]) * r.u[0] + (p[1] - r.o[1]) * r.u[1]; return [r.o[0] + r.u[0] * k, r.o[1] + r.u[1] * k]; }
+function cruce(r, s) {
+  const d = r.u[0] * s.u[1] - r.u[1] * s.u[0];
+  if (Math.abs(d) < 0.02) return null;  // casi paralelas: sin cruce útil
+  const k = ((s.o[0] - r.o[0]) * s.u[1] - (s.o[1] - r.o[1]) * s.u[0]) / d;
+  const q = [r.o[0] + r.u[0] * k, r.o[1] + r.u[1] * k];
+  return enAlcance(q, r) && enAlcance(q, s) ? q : null;
+}
+function iman(m, desde, e) {
+  if (e.metaKey) return { p: m, marca: null };
+  const tolP = 8 / vista.zoom, tolL = 6 / vista.zoom, lejos = (q, p) => Math.hypot(q[0] - p[0], q[1] - p[1]);
+  let p = m, rayo = null;
+  if (e.shiftKey && desde) {
+    const a = Math.round(Math.atan2(m[1] - desde[1], m[0] - desde[0]) / (Math.PI / 12)) * (Math.PI / 12);
+    rayo = { o: desde, u: [Math.cos(a), Math.sin(a)].map((v) => (Math.abs(v) < 1e-12 ? 0 : v)), k0: -Infinity, k1: Infinity };  // cos(90°) = 6e-17, no 0
+    p = proyectar(m, rayo);
+  }
+  if (!rayo) {
+    let mejor = null;
+    for (const b of bordes) for (const q of b) if (lejos(q, p) < tolP && (!mejor || lejos(q, p) < lejos(mejor, p))) mejor = q;
+    if (mejor) return { p: mejor, marca: { p: mejor, guias: [] } };
+  }
+  const cerca = [...bordes.map(recta), ...EJES].filter((r) => distRecta(p, r) < (rayo ? tolP : tolL))
+    .sort((a, b) => distRecta(p, a) - distRecta(p, b));
+  if (rayo) {
+    for (const r of cerca) { const q = cruce(rayo, r); if (q && lejos(q, p) < tolP) return { p: q, marca: { p: q, guias: [r] } }; }
+    return { p, marca: null };
+  }
+  for (let i = 0; i < cerca.length; i++) for (let j = i + 1; j < cerca.length; j++) {
+    const q = cruce(cerca[i], cerca[j]);
+    if (q && lejos(q, p) < tolP) return { p: q, marca: { p: q, guias: [cerca[i], cerca[j]] } };
+  }
+  if (cerca.length) { const q = proyectar(p, cerca[0]); return { p: q, marca: { p: q, guias: [cerca[0]] } }; }
+  return { p, marca: null };
+}
+async function pedirSugerencias() {
+  const id = ++peticionSug;
+  sugeridas = null; sobre();
+  const r = await api('/api/sugerencias', { capas: doc.capas.filter((c) => c.visible).map((c) => ({ id: c.id, anillos: anillosMundo(c) })) })
+    .catch(() => ({ error: 'sin respuesta' }));
+  if (id !== peticionSug || herramienta !== 'cuchilla') return;
+  sugeridas = r.error ? null : r.sugerencias;
+  bordes = r.error ? [] : r.bordes;
+  sobre();
 }
 
 // ---------- cuchilla
@@ -653,7 +747,7 @@ $('#dos').addEventListener('dblclick', () => {
 });
 async function terminarCorte() {
   const linea = cuchilla.puntos;
-  cuchilla = null; herramienta = 'mover';
+  cuchilla = null;  // la cuchilla sigue activa, como en Illustrator: Esc vuelve a Mover
   if (linea.length < 2) { todo(); return; }
   // como la cuchilla de Illustrator: corta todo lo visible que cruza, haya selección o no
   // (limitarla a la selección hacía que el segundo corte, tras seleccionar una pieza, no hiciera nada)
@@ -686,7 +780,7 @@ async function terminarCorte() {
     doc.capas.splice(i, 1, ...nuevas);
     piezas += nuevas.length; primera ??= nuevas[0].id;
   }
-  sel = primera; nodos = false; nodoSel = null;
+  sel = null; nodos = false; nodoSel = null;
   commit();
   estado(`Corte: ${r.cortes.length} capa(s) → ${piezas} piezas` + (r.atraviesa.length ? ' · y una costura en otra capa' : ''));
 }
@@ -922,7 +1016,7 @@ async function abrir(s) {
 $('#abrir').addEventListener('change', (e) => e.target.value && abrir(e.target.value));
 
 // para las pruebas de tests/: estado de solo lectura
-window.editor = { aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado };
+window.editor = { marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado };
 
 const lista = await api('/api/simbolos');
 ajustesBase = lista.ajustes;
