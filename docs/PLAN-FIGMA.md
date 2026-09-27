@@ -306,6 +306,25 @@ IoU ≥ 0,999 con su dibujo exacto (fórmulas, como el criterio de F6), y export
 importado otra vez, las mismas capas de trazo; todas las pruebas de la tabla de caminos
 abiertos; presupuesto de 16 ms arrastrando una capa de trazo en `shou-circular`.
 
+**Hecho el 2026-09-27** (falta la tarea de usuario). Sobre lo previsto:
+- El sondeo del inglete no hizo falta aparte: `buffer()` con `mitre_limit` (4 por
+  defecto, como Figma) da formas válidas en todas las pruebas, y `forma_de(c)` (antes
+  `forma_capa(c["anillos"])` en planta, cuchilla, imán y exportar) es el único sitio
+  donde el servidor decide la forma de una capa.
+- **Criterio de «redibujar los trazos de `xi-doble`»:** su imagen no se publica, así que
+  se comprueba lo equivalente: un trazo recto de extremos planos da exactamente el
+  rectángulo que se dibujaría a mano (diferencia de planta < 1e-12), y el caso de F5
+  pasa a APROBADO con «Engrosar lo necesario».
+- **Volver a curvas una forma calculada** (contornear, engrosar, adelgazar) usa una
+  tolerancia de 5e-5, no la de 2e-4 de abrir símbolos: con esa, un trazo de 0,05 se
+  quedaba en IoU 0,996; con 5e-5, 0,9993 y 19 nodos.
+- Un trazo con escala no uniforme (`scale(2 1)`) se importa contorneado: el grosor
+  variaría y el modelo de trazo no lo admite.
+- Un trazo no se ve en la vista 3D provisional (solo en la exacta), y se dice.
+- La cuchilla sobre un trazo que solo cruza su grosor no corta y lo dice
+  (`sin_esqueleto`).
+Medido: pytest 56 en verde, `test:ui` entero en verde; arrastre de shou-circular 0,3 ms.
+
 **Tarea de usuario (8 min):** escribir 十 con dos trazos de pluma (ancho 0,08, extremos
 redondos), contornear el horizontal y afinar su extremo derecho a mano. Hecho si:
 generado y APROBADO.

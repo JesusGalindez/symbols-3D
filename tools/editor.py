@@ -113,7 +113,7 @@ def importar(nombre, texto):
     doc = {"version": 2, "origen": None, "capas": [], "ajustes": dict(AJUSTES)}
     r = lambda v: None if v is None else [round(v[0], 9), round(v[1], 9)]  # noqa: E731
     for c in capas:
-        pts = [q for a in c["anillos"] for q in curvas.aplanar(a)]
+        pts = [q for a in c["anillos"] for q in curvas.aplanar(a, cerrado=not c.get("abierto"))]
         cx = (min(q[0] for q in pts) + max(q[0] for q in pts)) / 2
         cy = (min(q[1] for q in pts) + max(q[1] for q in pts)) / 2
         anillos = [[{"p": r([n["p"][0] - cx, n["p"][1] - cy]), "ent": r(n["ent"]), "sal": r(n["sal"])} for n in a]
@@ -122,7 +122,8 @@ def importar(nombre, texto):
             for n in a:
                 n["tipo"] = tipo_nodo(n)
         doc["capas"].append({"id": len(doc["capas"]) + 1, "nombre": c["nombre"], "op": c["op"], "visible": True,
-                             "anillos": anillos, "t": {"x": round(cx, 9), "y": round(cy, 9), "r": 0, "sx": 1, "sy": 1}})
+                             "anillos": anillos, "t": {"x": round(cx, 9), "y": round(cy, 9), "r": 0, "sx": 1, "sy": 1},
+                             **({"trazo": c["trazo"]} if c.get("trazo") else {}), **({"abierto": True} if c.get("abierto") else {})})
     base = re.sub(r"-+", "-", re.sub(r"[^a-z0-9-]", "-", Path(nombre).stem.lower())).strip("-") or "importado"
     libre, k = base, 2
     while (docs() / f"{libre}.json").exists() or protegido(libre) or (s.RAIZ / "svg" / f"{libre}.svg").exists():
@@ -130,13 +131,14 @@ def importar(nombre, texto):
     return {"nombre": libre, "doc": doc, "marco": marco}
 
 
-def trazo_svg(anillos, K=1000):
-    """Anillos de nodos en el mundo -> d="…" de SVG, en milésimas y con y hacia abajo."""
+def trazo_svg(anillos, K=1000, abierto=False):
+    """Anillos de nodos en el mundo -> d="…" de SVG, en milésimas y con y hacia abajo.
+    abierto: caminos sin el tramo de cierre ni Z."""
     f = lambda x, y: f"{round(x * K, 3):g} {round(-y * K, 3):g}"  # noqa: E731
     d = []
     for a in anillos:
         d.append("M" + f(*a[0]["p"]))
-        for i, n in enumerate(a):
+        for i, n in enumerate(a[:-1] if abierto else a):
             m = a[(i + 1) % len(a)]
             if n["sal"] is None and m["ent"] is None:
                 d.append("L" + f(*m["p"]))
@@ -144,7 +146,8 @@ def trazo_svg(anillos, K=1000):
             c1 = [n["p"][0] + n["sal"][0], n["p"][1] + n["sal"][1]] if n["sal"] is not None else n["p"]
             c2 = [m["p"][0] + m["ent"][0], m["p"][1] + m["ent"][1]] if m["ent"] is not None else m["p"]
             d.append(f"C{f(*c1)} {f(*c2)} {f(*m['p'])}")
-        d.append("Z")
+        if not abierto:
+            d.append("Z")
     return "".join(d)
 
 
@@ -159,22 +162,32 @@ def exportar_svg(capas, simetria, color):
     visibles = [c for c in capas if c.get("visible", True)]
     if not visibles:
         raise ValueError("no hay ninguna capa visible que exportar")
-    if simetria is None and all(c["op"] == "unir" for c in visibles):
-        rutas = [(c.get("nombre", f"Capa {i + 1}"), [a for a in c["anillos"] if a and isinstance(a[0], dict)]) for i, c in enumerate(visibles)]
-        pts = [q for _, anillos in rutas for a in anillos for q in curvas.aplanar(a)]
+    centrado = lambda c: not c.get("trazo") or {**TRAZO, **c["trazo"]}["posicion"] == "centro"  # noqa: E731
+    if simetria is None and all(c["op"] == "unir" and centrado(c) for c in visibles):
+        # un trazo sale como trazo de SVG (editable en Figma); dentro/fuera no existen en SVG
+        rutas = [(c.get("nombre", f"Capa {i + 1}"), [a for a in c["anillos"] if a and isinstance(a[0], dict)], c)
+                 for i, c in enumerate(visibles)]
+        pts = [q for c in visibles for p in s.lista(forma_de(c)) for q in p.exterior.coords]
     else:
         geo = planta(visibles, simetria)
         if geo.is_empty:
             raise ValueError("no queda ninguna forma que exportar")
         anillos = [curvas.ajustar_anillo(list(a.coords)[:-1], TOL_CURVAS)[0]
                    for p in s.lista(geo) for a in [p.exterior, *p.interiors]]
-        rutas, pts = [("Diseño", anillos)], [q for p in s.lista(geo) for q in p.exterior.coords]
+        rutas, pts = [("Diseño", anillos, {})], [q for p in s.lista(geo) for q in p.exterior.coords]
     x0, x1 = min(q[0] for q in pts) * 1000 - 20, max(q[0] for q in pts) * 1000 + 20
     y0, y1 = -max(q[1] for q in pts) * 1000 - 20, -min(q[1] for q in pts) * 1000 + 20
     marco = " ".join(f"{round(v, 3):g}" for v in (x0, y0, x1 - x0, y1 - y0))
     esc = lambda t: str(t).replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")  # noqa: E731
-    cuerpo = "\n".join(f'<path id="{esc(nombre)}" fill="{rgb}" fill-rule="evenodd" d="{trazo_svg(anillos)}"/>'
-                       for nombre, anillos in rutas if anillos)
+    def ruta(nombre, anillos, c):
+        if not c.get("trazo"):
+            return f'<path id="{esc(nombre)}" fill="{rgb}" fill-rule="evenodd" d="{trazo_svg(anillos)}"/>'
+        tr = {**TRAZO, **c["trazo"]}
+        return (f'<path id="{esc(nombre)}" fill="none" stroke="{rgb}" stroke-width="{round(float(tr["ancho"]) * 1000, 3):g}" '
+                f'stroke-linecap="{ {"redondo": "round", "plano": "butt", "cuadrado": "square"}[tr["extremos"]]}" '
+                f'stroke-linejoin="{ {"redonda": "round", "inglete": "miter", "bisel": "bevel"}[tr["uniones"]]}" '
+                f'stroke-miterlimit="{float(tr["inglete"]):g}" d="{trazo_svg(anillos, abierto=bool(c.get("abierto")))}"/>')
+    cuerpo = "\n".join(ruta(*r) for r in rutas if r[1])
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{marco}" width="{round(x1 - x0, 3):g}" '
             f'height="{round(y1 - y0, 3):g}">\n{cuerpo}\n</svg>\n')
 
@@ -185,6 +198,107 @@ def anillo_valido(a):
     como el relleno evenodd del lienzo."""
     g = shapely.make_valid(Polygon(a))
     return unary_union([x for x in getattr(g, "geoms", [g]) if x.geom_type in ("Polygon", "MultiPolygon")])
+
+
+TRAZO = {"ancho": 0.03, "extremos": "redondo", "uniones": "redonda", "inglete": 4.0, "posicion": "centro"}
+EXTREMOS = {"redondo": "round", "plano": "flat", "cuadrado": "square"}
+UNIONES = {"redonda": "round", "inglete": "mitre", "bisel": "bevel"}
+
+
+def forma_de(c):
+    """La forma de una capa en el mundo: su relleno evenodd o, si tiene trazo, el trazo de
+    su camino (abierto o cerrado) con su grosor. Un camino abierto sin trazo no rellena nada."""
+    tr = c.get("trazo")
+    if c.get("abierto") and not tr:
+        raise ValueError("una capa abierta necesita un trazo")
+    if not tr:
+        return forma_capa(c["anillos"])
+    return forma_trazo(c["anillos"], {**TRAZO, **tr}, bool(c.get("abierto")))
+
+
+def forma_trazo(anillos, tr, abierto):
+    """El trazo de un camino, como Figma: grosor, extremos (plano, redondo, cuadrado) y
+    uniones (inglete con su límite, redonda, bisel). En un camino cerrado, centrado en el
+    borde, por dentro o por fuera. El grosor va en unidades del mundo: escalar la capa no
+    lo cambia (decisión 6 del plan)."""
+    w = float(tr["ancho"])
+    if w <= 0:
+        return Polygon()
+    kw = {"join_style": UNIONES[tr["uniones"]], "mitre_limit": float(tr["inglete"]), "quad_segs": 16}
+    if abierto:
+        partes = []
+        for a in anillos:
+            pts = curvas.aplanar(a, cerrado=False) if a and isinstance(a[0], dict) else a
+            if len(pts) >= 2:
+                partes.append(LineString(pts).buffer(w / 2, cap_style=EXTREMOS[tr["extremos"]], **kw))
+        return shapely.make_valid(unary_union(partes)) if partes else Polygon()
+    relleno = forma_capa(anillos)
+    if tr["posicion"] == "dentro":
+        g = relleno.difference(relleno.buffer(-w, **kw))
+    elif tr["posicion"] == "fuera":
+        g = relleno.buffer(w, **kw).difference(relleno)
+    else:
+        g = relleno.buffer(w / 2, **kw).difference(relleno.buffer(-w / 2, **kw))
+    return shapely.make_valid(g)
+
+
+TOL_CONTORNO = 0.00005  # al volver a curvas una forma calculada: en un trazo de 0,05, con
+# 0,0002 (la de importar símbolos) el IoU caía a 0,996; con esta, 0,9993 y 19 nodos
+
+
+def a_curvas(geo):
+    """Una forma de shapely -> anillos de nodos (rectas, arcos y cúbicas), como al abrir un
+    símbolo: exteriores y huecos juntos, que el relleno evenodd combina bien."""
+    return [[{**n, "tipo": tipo_nodo(n)} for n in curvas.ajustar_anillo(list(a.coords)[:-1], TOL_CONTORNO)[0]]
+            for p in s.lista(geo) for a in [p.exterior, *p.interiors] if len(a.coords) >= 4]
+
+
+def contornear(capas):
+    """Contornear trazo (⇧⌘O): cada capa, su forma exacta como relleno con curvas."""
+    return [{"id": c.get("id"), "anillos": a_curvas(forma_de(c))} for c in capas]
+
+
+def desplazar(capas, d):
+    """Engrosar (d > 0) o adelgazar (d < 0) cada capa d por cada lado. Un trazo cambia su
+    grosor (2d); un relleno, su contorno, en inglete (las esquinas siguen vivas: el
+    redondeo es cosa del acabado) y reajustado a curvas."""
+    out = []
+    for c in capas:
+        if c.get("trazo"):
+            tr = {**TRAZO, **c["trazo"]}
+            out.append({"id": c.get("id"), "trazo": {**c["trazo"], "ancho": max(1e-4, float(tr["ancho"]) + 2 * d)}})
+        else:
+            g = forma_de(c).buffer(d, join_style="mitre", mitre_limit=4.0)
+            if g.is_empty:
+                raise ValueError(f"adelgazar {-d:g} hace desaparecer «{c.get('nombre', c.get('id'))}»")
+            out.append({"id": c.get("id"), "anillos": a_curvas(g)})
+    return out
+
+
+def engrosar_lo_necesario(capas, bisel, simetria=None, hasta=0.03):
+    """«Generar» rechazó por trazo fino: el menor d (± 1e-4) que, aplicado a las capas que
+    forman las piezas que pierden demasiado al redondear, deja todas por debajo de
+    simbolo.PERDIDA_MAX. Devuelve d y las capas cambiadas (desplazar())."""
+    perdida = lambda base: s.area_perdida(base, acabar(base, bisel))  # noqa: E731
+    base = planta(capas, simetria)
+    if perdida(base) <= s.PERDIDA_MAX:
+        return {"d": 0.0, "capas": []}
+    malas = [p for p in s.lista(base) if p.area > 0 and 1 - acabar(p, bisel).intersection(p).area / p.area > s.PERDIDA_MAX]
+    culpables = [c for c in capas if c.get("op") == "unir" and c.get("visible", True)
+                 and any(forma_de(c).intersection(p).area > 0 for p in malas)]
+    ids = {id(c) for c in culpables}
+
+    def con(d):  # las capas con las culpables engrosadas d (sin reajustar a curvas: más rápido)
+        return [({**c, "trazo": {**c["trazo"], "ancho": float({**TRAZO, **c["trazo"]}["ancho"]) + 2 * d}} if c.get("trazo")
+                 else {**c, "anillos": [list(a.coords)[:-1] for p in s.lista(forma_de(c).buffer(d, join_style="mitre", mitre_limit=4.0))
+                                        for a in [p.exterior, *p.interiors]]}) if id(c) in ids else c for c in capas]
+    if perdida(planta(con(hasta), simetria)) > s.PERDIDA_MAX:
+        raise ValueError(f"ni engrosando {hasta:g} por lado aprueba")
+    lo, hi = 0.0, hasta
+    while hi - lo > 5e-5:
+        mid = (lo + hi) / 2
+        lo, hi = (lo, mid) if perdida(planta(con(mid), simetria)) <= s.PERDIDA_MAX else (mid, hi)
+    return {"d": hi, "capas": desplazar(culpables, hi)}
 
 
 def forma_capa(anillos):
@@ -204,7 +318,7 @@ def planta(capas, simetria=None):
     Sin el redondeo del acabado (con él, geometria())."""
     geo = Polygon()
     for c in capas:
-        forma = shapely.set_precision(forma_capa(c["anillos"]), PRECISION)
+        forma = shapely.set_precision(forma_de(c), PRECISION)
         geo = geo.union(forma) if c["op"] == "unir" else geo.difference(forma)
     geo = simetrizar(geo, simetria)
     return unary_union([p for p in s.lista(geo.buffer(0)) if p.area > 1e-7])
@@ -252,10 +366,18 @@ def cortar(capas, linea):
     Devuelve las capas separadas con sus piezas, y las que la línea atraviesa sin separar
     (el navegador guarda esa línea como costura). Una capa con curvas recibe sus piezas
     como nodos, con las curvas partidas por De Casteljau (curvas.recurvar)."""
-    cortes, atraviesa = [], []
+    cortes, atraviesa, sin_esqueleto = [], [], []
     for c in capas:
-        forma = forma_capa(c["anillos"])
+        forma = forma_de(c)
         if forma.is_empty:
+            continue
+        if c.get("trazo"):  # un trazo se corta por su esqueleto, y sus trozos siguen siendo trazos
+            piezas = cortar_trazo(c, alargar(linea, forma))
+            if piezas is None:
+                if LineString(linea).intersects(forma):
+                    sin_esqueleto.append(c["id"])
+            else:
+                cortes.append({"id": c["id"], "piezas": [[a] for a, _ in piezas], "abiertos": [ab for _, ab in piezas]})
             continue
         nueva = alargar(linea, forma)
         if nueva.intersection(forma).length < 1e-4:
@@ -274,7 +396,34 @@ def cortar(capas, linea):
             cortes.append({"id": c["id"], "piezas": piezas})
         else:
             atraviesa.append(c["id"])
-    return {"cortes": cortes, "atraviesa": atraviesa}
+    return {"cortes": cortes, "atraviesa": atraviesa, **({"sin_esqueleto": sin_esqueleto} if sin_esqueleto else {})}
+
+
+def cortar_trazo(c, linea):
+    """Los caminos de una capa de trazo partidos donde la línea cruza su esqueleto:
+    [(nodos, abierto)], o None si no cruza ninguno. El parámetro t del cruce sale del
+    aplanado (a < 1e-4 de la curva) y el punto de corte es el de la curva en ese t."""
+    abierto, out, corta = bool(c.get("abierto")), [], False
+    for a in c["anillos"]:
+        pts = curvas.aplanar_t(a, cerrado=not abierto)
+        segs = list(zip(pts, pts[1:] + (pts[:1] if not abierto else [])))
+        cortes = []
+        for p, q in segs:
+            cruce = LineString([p[:2], q[:2]]).intersection(linea)
+            for g in getattr(cruce, "geoms", [cruce]):
+                if g.geom_type != "Point":
+                    continue
+                L = math.dist(p[:2], q[:2]) or 1
+                lam = math.dist(p[:2], g.coords[0]) / L
+                t1 = q[3] if q[2] == p[2] else 1.0
+                cortes.append((p[2], p[3] + lam * (t1 - p[3])))
+        if cortes:
+            corta = True
+            trozos = curvas.partir_camino(a, cortes, cerrado=not abierto)
+            out += [([{**n, "tipo": tipo_nodo(n)} for n in t], True) for t in trozos]
+        else:
+            out.append((a, abierto))
+    return out if corta else None
 
 
 def sin_astillas(caras, minima=1e-4):
@@ -321,7 +470,9 @@ def sugerencias(capas, largo_min=0.03, max_corte=0.12, paralelos=0.02):
     trazos distintos casi alineados) dejarían una astilla entre ellos: se funden en uno."""
     cortes = []
     for c in capas:
-        forma = forma_capa(c["anillos"])
+        if c.get("trazo"):
+            continue  # las uniones en T son de contornos rellenos
+        forma = forma_de(c)
         propios = []
         for p in s.lista(forma):
             for anillo in [p.exterior, *p.interiors]:
@@ -343,8 +494,10 @@ def bordes_rectos(capas, largo_min=0.015):
     """Bordes rectos de cada capa, [a, b, id]: el imán engancha a sus extremos, a ellos
     mismos y a sus prolongaciones (por donde pasa un corte limpio de una unión). Con el id,
     al mover una capa se ignoran los suyos."""
-    return [[list(a), list(b), c.get("id")] for c in capas for p in s.lista(forma_capa(c["anillos"]))
-            for anillo in [p.exterior, *p.interiors] for a, b in tramos_rectos(anillo, largo_min)]
+    extremos = [[list(a[i]["p"]), list(a[i]["p"]), c.get("id")] for c in capas if c.get("abierto")
+                for a in c["anillos"] for i in (0, -1)]  # los extremos de los caminos abiertos
+    return [[list(a), list(b), c.get("id")] for c in capas for p in s.lista(forma_de(c))
+            for anillo in [p.exterior, *p.interiors] for a, b in tramos_rectos(anillo, largo_min)] + extremos
 
 
 def prolongar(forma, o, u, max_corte):
@@ -511,7 +664,7 @@ def previa(doc, capas):
 # al guardar.
 CAMPOS = {
     "doc": {"version", "origen", "capas", "ajustes", "simetria"},
-    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada"},
+    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto"},
     "nodo": {"p", "ent", "sal", "tipo"},
 }
 
@@ -632,6 +785,15 @@ class Manejador(SimpleHTTPRequestHandler):
         if self.path == "/api/cortar":
             try:
                 return self.responder(cortar(datos["capas"], datos["linea"]))
+            except Exception as e:
+                return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
+        if self.path in ("/api/contornear", "/api/desplazar", "/api/engrosar"):
+            try:
+                if self.path == "/api/contornear":
+                    return self.responder({"capas": contornear(datos["capas"])})
+                if self.path == "/api/desplazar":
+                    return self.responder({"capas": desplazar(datos["capas"], float(datos["d"]))})
+                return self.responder(engrosar_lo_necesario(datos["capas"], float(datos["bisel"]), datos.get("simetria")))
             except Exception as e:
                 return self.responder({"error": f"{type(e).__name__}: {e}"}, 422)
         if self.path == "/api/svg":

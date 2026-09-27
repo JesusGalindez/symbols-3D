@@ -34,7 +34,8 @@ def en_mundo(doc):
     o nodos; los tiradores de un nodo son relativos y no cambian."""
     mover = lambda p, t: [p[0] + t["x"], p[1] + t["y"]]  # noqa: E731
     return [{"op": c["op"], "anillos": [[{**n, "p": mover(n["p"], c["t"])} if isinstance(n, dict) else mover(n, c["t"])
-                                         for n in a] for a in c["anillos"]]} for c in doc["capas"]]
+                                         for n in a] for a in c["anillos"]],
+             **{k: c[k] for k in ("trazo", "abierto") if k in c}} for c in doc["capas"]]
 
 
 def verificar(glb, fuente):
@@ -77,9 +78,10 @@ def test_aplanar_es_la_misma_en_el_navegador():
     anillos = [a for c in editor.piezas_curvas("fu-trazo")["capas"] for a in c["anillos"]]
     anillos.append([{"p": [0.5, 0], "ent": [0, -0.27], "sal": [0, 0.27]}, {"p": [0, 0.5], "ent": [0.27, 0], "sal": None},
                     {"p": [-0.5, 0], "ent": None, "sal": None}])
-    js = fuente + f"console.log(JSON.stringify({json.dumps(anillos)}.map((a) => aplanar(a))));"
+    js = fuente + (f"console.log(JSON.stringify([...{json.dumps(anillos)}.map((a) => aplanar(a)), "
+                   f"...{json.dumps(anillos)}.map((a) => aplanar(a, 0.0001, false))]));")
     r = subprocess.run(["node", "-e", js], capture_output=True, text=True, check=True)
-    assert json.loads(r.stdout) == [curvas.aplanar(a) for a in anillos]
+    assert json.loads(r.stdout) == [curvas.aplanar(a) for a in anillos] + [curvas.aplanar(a, cerrado=False) for a in anillos]
 
 
 def test_documento_version_1_da_la_misma_forma():
@@ -481,7 +483,7 @@ def test_generar_rechaza_un_trazo_fino(salida):
 
 # ---------- F6: importar SVG
 LOGO = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160">
-  <style>.rojo{fill:#e30613} .linea{fill:none;stroke:#000}</style>
+  <style>.rojo{fill:#e30613} .linea{fill:none}</style>
   <defs><path id="oculto" d="M0 0h500v500z"/></defs>
   <circle class="rojo" cx="60" cy="60" r="40"/>
   <path class="linea" d="M0 0L240 160"/>
@@ -521,7 +523,7 @@ def test_importar_svg_iou_con_su_dibujo(salida):
     r = editor.importar("Logo Final.svg", LOGO)
     assert r["nombre"] == "logo-final"
     doc, m = r["doc"], r["marco"]
-    assert len(doc["capas"]) == 4 and all(c["op"] == "unir" for c in doc["capas"])  # sin trazos ni defs
+    assert len(doc["capas"]) == 4 and all(c["op"] == "unir" for c in doc["capas"])  # sin lo que no pinta ni defs
     nodos = [n for c in doc["capas"] for a in c["anillos"] for n in a]
     assert sum(1 for n in nodos if n["ent"] or n["sal"]) >= 20 and len(nodos) < 60  # curvas, no polígonos
     hecho = editor.planta(en_mundo(doc))
@@ -555,7 +557,7 @@ def test_importar_trayectos_raros():
     assert len(arco) >= 3 and arco[-1][-1] == (5, 0)  # arco grande: tres cuartos de vuelta
     assert editor.leer_svg.subrutas("M1.5.5L2 2")[0][0] == (1.5, 0.5)
     with pytest.raises(ValueError):
-        editor.leer_svg.leer('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0L9 9" fill="none" stroke="red"/></svg>')
+        editor.leer_svg.leer('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0L9 9" fill="none"/></svg>')  # ni relleno ni trazo
 
 
 def iou(a, b):
@@ -596,3 +598,132 @@ def test_campos_desconocidos_se_rechazan(salida):
     with pytest.raises(ValueError, match="capa.inventado, nodo.otro"):
         editor.guardar("con-campos-raros", doc)
     assert not (salida / "editor" / "con-campos-raros.json").exists()
+
+
+# ---------- G2: caminos abiertos y trazos
+def camino(*pts, abierto=True, **trazo):
+    """Capa de trazo en el mundo con un camino de nodos vivos."""
+    return {"id": 1, "op": "unir", "anillos": [[{"p": list(p), "ent": None, "sal": None} for p in pts]],
+            "abierto": abierto, "trazo": {**editor.TRAZO, **trazo}}
+
+
+def test_trazo_recto_tiene_el_area_exacta():
+    """Criterio de G2: ancho 0,03 y extremos planos, L × 0,03 (< 1e-9); redondos, más un
+    círculo de radio 0,015 (< 1e-5, por el aplanado del arco)."""
+    L = 0.4
+    plano = editor.forma_de(camino((-0.2, 0.1), (0.2, 0.1), extremos="plano"))
+    assert abs(plano.area - L * 0.03) < 1e-9
+    redondo = editor.forma_de(camino((-0.2, 0.1), (0.2, 0.1), extremos="redondo"))
+    assert abs(redondo.area - (L * 0.03 + math.pi * 0.015 ** 2)) < 1e-5
+
+
+def test_trazo_con_extremos_planos_es_el_rectangulo():
+    """Un trazo recto de extremos planos es el rectángulo que dibujaría a mano: la misma
+    planta (diferencia < 1e-12) y generado APROBADO."""
+    rect = {"op": "unir", "anillos": [[[-0.3, 0.05], [0.3, 0.05], [0.3, 0.13], [-0.3, 0.13]]]}
+    trazo = camino((-0.3, 0.09), (0.3, 0.09), ancho=0.08, extremos="plano")
+    base = {"op": "unir", "anillos": [[[-0.2, -0.3], [0.2, -0.3], [0.2, 0.0], [-0.2, 0.0]]]}
+    a, b = editor.planta([base, rect]), editor.planta([base, trazo])
+    assert a.symmetric_difference(b).area < 1e-12
+
+
+def test_sin_trazo_no_hay_camino_abierto():
+    c = camino((0, 0), (0.2, 0))
+    del c["trazo"]
+    with pytest.raises(ValueError, match="necesita un trazo"):
+        editor.forma_de(c)
+
+
+def test_trazo_cerrado_centro_dentro_fuera():
+    """Un cuadrado de lado 0,4 con trazo 0,02: centrado, un marco de 0,38 a 0,42; dentro,
+    de 0,36 a 0,4; fuera, de 0,4 a 0,44 (uniones en inglete: esquinas vivas)."""
+    cuadro = [(-0.2, -0.2), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)]
+    for pos, (a, b) in {"centro": (0.38, 0.42), "dentro": (0.36, 0.4), "fuera": (0.4, 0.44)}.items():
+        g = editor.forma_de(camino(*cuadro, abierto=False, ancho=0.02, uniones="inglete", posicion=pos))
+        assert abs(g.area - (b * b - a * a)) < 1e-9, pos
+
+
+def test_contornear_un_trazo_curvo():
+    """Contornear un trazo curvo da un relleno con curvas y la misma forma (IoU ≥ 0,999)."""
+    c = camino((-0.3, 0), (0.3, 0), ancho=0.05)
+    c["anillos"][0][0]["sal"], c["anillos"][0][1]["ent"] = [0.2, 0.3], [-0.2, 0.3]
+    [r] = editor.contornear([c])
+    hecho, antes = editor.forma_capa(r["anillos"]), editor.forma_de(c)
+    assert iou(hecho, antes) >= 0.999
+    assert any(n["ent"] or n["sal"] for a in r["anillos"] for n in a) and sum(map(len, r["anillos"])) < 40
+
+
+def test_la_cuchilla_parte_el_esqueleto_de_un_trazo():
+    """Un trazo recto cortado por la mitad: dos trazos abiertos de área L/2 · a (planos)."""
+    c = camino((-0.2, 0), (0.2, 0), ancho=0.04, extremos="plano")
+    r = editor.cortar([c], [[0.0, -0.3], [0.0, 0.3]])
+    [corte] = r["cortes"]
+    assert corte["abiertos"] == [True, True] and len(corte["piezas"]) == 2
+    for poli in corte["piezas"]:
+        assert abs(editor.forma_de({**c, "anillos": poli}).area - 0.2 * 0.04) < 1e-12
+    # por el grosor pero sin cruzar el esqueleto: no corta y lo dice
+    r = editor.cortar([c], [[-0.25, 0.01], [0.25, 0.015]])
+    assert not r["cortes"] and r["sin_esqueleto"] == [1]
+
+
+def test_engrosar_lo_necesario_aprueba_el_trazo_fino(salida):
+    """Criterio de G2: el caso RECHAZADO de F5 (un trazo de 0,01) pasa a APROBADO con el
+    menor d que aprueba (± 1e-4)."""
+    cuadro = lambda x, y, w, h: {"op": "unir", "nombre": "c", "anillos": [[[x - w / 2, y - h / 2], [x + w / 2, y - h / 2],  # noqa: E731
+                                                                          [x + w / 2, y + h / 2], [x - w / 2, y + h / 2]]]}
+    capas = [cuadro(0, 0, 0.6, 0.6), {**cuadro(0, 0.4, 0.3, 0.01), "nombre": "fino"}]
+    r = editor.engrosar_lo_necesario(capas, s.BISEL)
+    d = r["d"]
+    assert [c for c in r["capas"]] and len(r["capas"]) == 1  # solo la culpable
+    nuevas = [capas[0], {**capas[1], "anillos": r["capas"][0]["anillos"]}]
+    doc = {"version": 2, "capas": [], "ajustes": dict(editor.AJUSTES)}
+    assert editor.generar("engrosado", doc, nuevas)["aprobado"]
+    menos = [capas[0], {**capas[1], "anillos": [list(a.coords)[:-1] for a in [editor.forma_capa(capas[1]["anillos"]).buffer(
+        d - 2e-4, join_style="mitre").exterior]]}]
+    base = editor.planta(menos)
+    assert s.area_perdida(base, editor.acabar(base, s.BISEL)) > s.PERDIDA_MAX  # con 2e-4 menos, no aprueba
+
+
+TRAZOS_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <line x1="20" y1="20" x2="180" y2="20" stroke="#000" stroke-width="8"/>
+  <polyline points="20,50 100,80 180,50" fill="none" stroke="#000" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M40 90A60 60 0 0 1 160 90" fill="none" stroke="red" stroke-width="4" stroke-linecap="square"/>
+</svg>"""
+
+
+def test_importar_trazos_de_un_svg():
+    """Criterio de G2: línea, polilínea y arco con sus extremos → capas de trazo con IoU ≥
+    0,999 contra su dibujo exacto; exportadas e importadas otra vez, las mismas capas."""
+    from shapely import affinity
+    r = editor.importar("trazos.svg", TRAZOS_SVG)
+    capas = r["doc"]["capas"]
+    assert [c.get("abierto") for c in capas] == [True] * 3 and [c["trazo"]["extremos"] for c in capas] == ["plano", "redondo", "cuadrado"]
+    arco = [(100 - 60 * math.cos(a), 90 - 60 * math.sin(a)) for a in (k * math.pi / 4000 for k in range(4001))]
+    exacto = unary_union([LineString([(20, 20), (180, 20)]).buffer(4, cap_style="flat"),
+                          LineString([(20, 50), (100, 80), (180, 50)]).buffer(3, quad_segs=256),
+                          LineString(arco).buffer(2, cap_style="square", join_style="mitre")])
+    m = r["marco"]
+    exacto = affinity.scale(affinity.translate(exacto, -m["cx"], -m["cy"]), m["s"], -m["s"], origin=(0, 0))
+    hecho = editor.planta(en_mundo(r["doc"]))
+    assert iou(hecho, exacto) >= 0.999
+    mundo = [{**c, "anillos": a} for c, a in zip(capas, (x["anillos"] for x in en_mundo(r["doc"])))]
+    texto = editor.exportar_svg(mundo, None, [0.6, 0.05, 0.03, 1])
+    assert texto.count('fill="none"') == 3 and "stroke-linecap" in texto
+    vuelta = editor.importar("vuelta.svg", texto)["doc"]["capas"]
+    assert [(c.get("abierto"), c["trazo"]["extremos"]) for c in vuelta] == [(c.get("abierto"), c["trazo"]["extremos"]) for c in capas]
+    # el grosor, a una parte en 1e-4: la vuelta reescala por la caja, que el redondeo de la
+    # exportación (milésimas con 3 decimales) mueve un poco
+    assert all(abs(v["trazo"]["ancho"] / c["trazo"]["ancho"] - 1) < 1e-4 for v, c in zip(vuelta, capas))
+
+
+def test_trazo_con_escala_no_uniforme_se_contornea():
+    """Con transform="scale(2 1)" el grosor variaría: el importador lo contornea."""
+    capas, _ = editor.leer_svg.leer('<svg xmlns="http://www.w3.org/2000/svg"><g transform="scale(2 1)">'
+                                    '<circle cx="50" cy="50" r="40" fill="none" stroke="#000" stroke-width="10"/></g></svg>')
+    assert len(capas) == 1 and "trazo" not in capas[0] and len(capas[0]["anillos"]) == 2  # un anillo con su hueco
+
+
+def test_los_extremos_de_un_camino_son_objetivos_del_iman():
+    c = camino((-0.2, 0), (0.1, 0.05), (0.2, 0.3))
+    extremos = [(a, b) for a, b, _ in editor.bordes_rectos([c]) if a == b]
+    assert extremos == [([-0.2, 0], [-0.2, 0]), ([0.2, 0.3], [0.2, 0.3])]

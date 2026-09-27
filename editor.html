@@ -73,6 +73,13 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #lienzo.provisional .capa.unir{fill:var(--laca)}
 #lienzo.provisional .capa.restar{fill:var(--fondo)}
 #lienzo .capa:hover{stroke:var(--acento);stroke-width:1.5}
+/* capas de trazo: el grosor va en el estilo de cada una (unidades del mundo); en la vista
+   exacta el trazo es invisible pero se puede pulsar, y se ve su esqueleto */
+#lienzo .capa.trazo,#flotante .capa.trazo,.flotante-espejo .capa.trazo{fill:none;vector-effect:none;stroke:rgba(255,255,255,.001);pointer-events:stroke}
+#lienzo.provisional .capa.trazo.unir,#flotante .capa.trazo.unir,.flotante-espejo .capa.trazo.unir{stroke:var(--laca)}
+#lienzo.provisional .capa.trazo.restar,#flotante .capa.trazo.restar,.flotante-espejo .capa.trazo.restar{stroke:var(--fondo)}
+#lienzo .capa.trazo:hover{stroke:rgba(13,153,255,.35)}
+#lienzo .esqueleto{fill:none;stroke:rgba(255,255,255,.4);stroke-width:1;stroke-dasharray:4 3;pointer-events:none}
 #dos .contorno{fill:none;stroke:var(--acento);stroke-width:1.5;pointer-events:none}
 #sobre .caja{fill:none;stroke:var(--acento);stroke-width:1;pointer-events:none}
 #sobre .asa{fill:#fff;stroke:var(--acento);stroke-width:1.2;cursor:nwse-resize;pointer-events:all}
@@ -121,7 +128,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <button data-herr="mover" title="Mover (V)">↖ Mover</button>
     <button data-herr="rect" title="Rectángulo (R)">▭ Rect</button>
     <button data-herr="elipse" title="Elipse (O)">◯ Elipse</button>
-    <button data-herr="pluma" title="Pluma (P): clic = esquina · clic y arrastrar = curva · clic en el primer nodo o Enter cierra · Esc cancela">✒ Pluma</button>
+    <button data-herr="pluma" title="Pluma (P): clic = esquina · clic y arrastrar = curva · clic en el primer nodo cierra · Enter o Esc: camino abierto con trazo">✒ Pluma</button>
     <button data-herr="cuchilla" title="Cortar (K): clic en una línea azul, o arrastra una recta de lado a lado (imán a bordes y esquinas; Mayús = ángulos de 15°; ⌘ sin imán)">✂ Cortar</button>
     <button id="bNodos" title="Editar nodos (Enter o doble clic)">⬩ Nodos</button>
     <span class="sep"></span>
@@ -150,7 +157,8 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 </div>
 <div id="ayuda" hidden><div class="caja-ayuda">
   <h4>Herramientas</h4><dl><dt>V</dt><dd>Mover</dd><dt>R · O</dt><dd>Rectángulo · elipse (⇧: proporción)</dd>
-    <dt>P</dt><dd>Pluma: clic esquina, clic y arrastrar curva; clic en el primero o Enter cierra</dd>
+    <dt>P</dt><dd>Pluma: clic esquina, clic y arrastrar curva; clic en el primero cierra; Enter o Esc deja un camino abierto con trazo; clic en un extremo de un camino lo alarga</dd>
+    <dt>⇧⌘O</dt><dd>Contornear trazo (pasa a forma rellena)</dd>
     <dt>K</dt><dd>Cuchilla: clic en una línea azul o arrastrar una recta</dd><dt>Enter · doble clic</dt><dd>Nodos de la capa elegida</dd></dl>
   <h4>Selección</h4><dl><dt>Clic</dt><dd>Una capa</dd><dt>⇧ + clic</dt><dd>Sumar o quitar (también en la lista)</dd>
     <dt>Arrastrar en vacío</dt><dd>Recuadro: lo que toca</dd><dt>⌘A</dt><dd>Todas</dd><dt>Esc</dt><dd>Salir de nodos, soltar la selección</dd></dl>
@@ -209,9 +217,9 @@ function aLocal(t, [x, y]) {
 // sal son tiradores relativos a p (null: ese lado es recto). aplanar() es la de
 // tools/curvas.py operación por operación: la geometría que cuenta la aplana el servidor
 // con la suya; esta es para la vista, la caja y el 3D provisional.
-function aplanar(nodos, tol = 0.0001) {
+function aplanar(nodos, tol = 0.0001, cerrado = true) {
   const out = [], n = nodos.length;
-  for (let k = 0; k < n; k++) {
+  for (let k = 0; k < (cerrado ? n : n - 1); k++) {
     const a = nodos[k], b = nodos[(k + 1) % n], [x0, y0] = a.p, [x3, y3] = b.p;
     out.push([x0, y0]);
     if (a.sal === null && b.ent === null) continue;
@@ -232,6 +240,7 @@ function aplanar(nodos, tol = 0.0001) {
     }
     out.pop();  // el último trozo acaba en el nodo siguiente, que pone él mismo
   }
+  if (!cerrado && n) out.push([nodos[n - 1].p[0], nodos[n - 1].p[1]]);
   return out;
 }
 const nodo = (p) => ({ p, ent: null, sal: null, tipo: 'vivo' });
@@ -239,7 +248,7 @@ const nodo = (p) => ({ p, ent: null, sal: null, tipo: 'vivo' });
 const cachePlano = new WeakMap();
 function plano(c) {
   let r = cachePlano.get(c.anillos);
-  if (!r) { r = c.anillos.map((a) => aplanar(a)); cachePlano.set(c.anillos, r); }
+  if (!r) { r = c.anillos.map((a) => aplanar(a, 0.0001, !c.abierto)); cachePlano.set(c.anillos, r); }
   return r;
 }
 function caja(capa) {
@@ -247,7 +256,23 @@ function caja(capa) {
   for (const r of plano(capa)) for (const [u, v] of r) {
     b[0] = Math.min(b[0], u); b[1] = Math.min(b[1], v); b[2] = Math.max(b[2], u); b[3] = Math.max(b[3], v);
   }
-  return b;
+  const m = margenTrazo(capa) / escalaCapa(capa.t);  // la caja de un trazo incluye su grosor
+  return m ? [b[0] - m, b[1] - m, b[2] + m, b[3] + m] : b;
+}
+// Trazos (G2): el grosor va en unidades del mundo, no escala con la capa
+const TRAZO = { ancho: 0.03, extremos: 'redondo', uniones: 'redonda', inglete: 4, posicion: 'centro' };
+const trazoDe = (c) => c.trazo && { ...TRAZO, ...c.trazo };
+const escalaCapa = (t) => Math.sqrt(Math.abs(t.sx * t.sy)) || 1;
+function margenTrazo(c) {  // cuánto sale el trazo fuera del camino
+  const tr = trazoDe(c);
+  return !tr ? 0 : tr.posicion === 'fuera' && !c.abierto ? tr.ancho : tr.posicion === 'dentro' && !c.abierto ? 0 : tr.ancho / 2;
+}
+const LINECAP = { redondo: 'round', plano: 'butt', cuadrado: 'square' }, LINEJOIN = { redonda: 'round', inglete: 'miter', bisel: 'bevel' };
+// el <path> de una capa (lienzo, flotante y reflejos); un trazo lleva su grosor en la capa
+function pathCapa(c, atributos = '') {
+  const tr = trazoDe(c);
+  const estilo = tr ? ` style="stroke-width:${tr.ancho / escalaCapa(c.t)};stroke-linecap:${LINECAP[tr.extremos]};stroke-linejoin:${LINEJOIN[tr.uniones]};stroke-miterlimit:${tr.inglete}"` : '';
+  return `<path class="capa ${c.op}${tr ? ' trazo' : ''}${c.bloqueada ? ' bloqueada' : ''}" ${atributos} fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"${estilo}/>`;
 }
 const esquinas = (b) => [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]];
 const anillosMundo = (c) => plano(c).map((r) => r.map((p) => aMundo(c.t, p)));
@@ -257,7 +282,8 @@ function nodosMundo(c) {
   const [a, b, cc, d] = matCapa(c.t), L = (v) => v && [a * v[0] + cc * v[1], b * v[0] + d * v[1]];
   return c.anillos.map((r) => r.map((n) => ({ p: aMundo(c.t, n.p), ent: L(n.ent), sal: L(n.sal) })));
 }
-const capasMundo = () => doc.capas.filter((c) => c.visible).map((c) => ({ id: c.id, op: c.op, anillos: nodosMundo(c) }));
+const capasMundo = () => doc.capas.filter((c) => c.visible).map(capaMundo);
+const capaMundo = (c) => ({ id: c.id, nombre: c.nombre, op: c.op, anillos: nodosMundo(c), ...(c.trazo ? { trazo: c.trazo } : {}), ...(c.abierto ? { abierto: true } : {}) });
 // selección: ids de capas; nodos, asas propias y el panel de capa, solo con una
 const capaSel = () => (selec.length === 1 && doc?.capas.find((c) => c.id === selec[0])) || null;
 const capasSel = () => doc?.capas.filter((c) => selec.includes(c.id)) ?? [];
@@ -300,16 +326,16 @@ const marcoCapa = (t) => `matrix(${matCapa(t).join(' ')})`;
 const anillosD = (anillos) => anillos.map((r) => 'M' + r.map((p) => p[0].toFixed(6) + ' ' + p[1].toFixed(6)).join('L') + 'Z').join('');
 // el trazado de una capa con las curvas tal cual (C de SVG), sin aplanar
 const f6 = (x, y) => x.toFixed(6) + ' ' + y.toFixed(6);
-const nodosD = (anillos) => anillos.map((r) => 'M' + f6(...r[0].p) + r.map((a, i) => {
+const nodosD = (anillos, abierto = false) => anillos.map((r) => 'M' + f6(...r[0].p) + (abierto ? r.slice(0, -1) : r).map((a, i) => {
   const b = r[(i + 1) % r.length];
   if (a.sal === null && b.ent === null) return 'L' + f6(...b.p);
   const c1 = a.sal ? [a.p[0] + a.sal[0], a.p[1] + a.sal[1]] : a.p, c2 = b.ent ? [b.p[0] + b.ent[0], b.p[1] + b.ent[1]] : b.p;
   return 'C' + f6(...c1) + ' ' + f6(...c2) + ' ' + f6(...b.p);
-}).join('') + 'Z').join('');
+}).join('') + (abierto ? '' : 'Z')).join('');
 const cacheD = new WeakMap();
 function dCapa(c) {
   let d = cacheD.get(c.anillos);
-  if (d === undefined) { d = nodosD(c.anillos); cacheD.set(c.anillos, d); }
+  if (d === undefined) { d = nodosD(c.anillos, c.abierto); cacheD.set(c.anillos, d); }
   return d;
 }
 let dExacto = '', dContorno = null, contornosPrev = [];
@@ -333,15 +359,16 @@ function espejoProvisional(capas) {
 }
 
 function dibujar() {
-  let capas = '';
+  let capas = '', esqueletos = '';
   let costuras = '';
   for (const c of doc.capas) if (c.visible) {
-    capas += `<path class="capa ${c.op}${c.bloqueada ? ' bloqueada' : ''}" data-id="${c.id}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>`;
+    capas += pathCapa(c, `data-id="${c.id}"`);
+    if (c.trazo) esqueletos += `<path class="esqueleto" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>`;
     if (c.costuras?.length) costuras += `<path class="costura" data-costura="${c.id}" transform="${marcoCapa(c.t)}" d="${c.costuras.map((l) => 'M' + l.map((q) => q.join(' ')).join('L')).join('')}"/>`;
   }
   lienzo.innerHTML = `<g id="mundo" transform="${marcoMundo()}">
       <circle class="guia" r="0.5"/><line class="guia" x1="-1000" x2="1000"/><line class="guia" y1="-1000" y2="1000"/>
-      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/><g id="capasLienzo">${capas}</g>${espejoProvisional(capas)}${costuras}</g>`;
+      <path class="exacto" fill-rule="evenodd" d="${exacta ? dExacto : ''}"/><g id="capasLienzo">${capas}</g>${espejoProvisional(capas)}${esqueletos}${costuras}</g>`;
   lienzo.setAttribute('class', `herr-${herramienta}${espacio ? ' pan' : ''}${exacta ? '' : ' provisional'}`);
   sobre();
 }
@@ -350,6 +377,7 @@ function refrescar(c) {
   if (c) {
     for (const p of lienzo.querySelectorAll(`path.capa[data-id="${c.id}"]`)) {  // la capa y sus reflejos
       p.setAttribute('transform', marcoCapa(c.t)); p.setAttribute('d', dCapa(c));
+      if (c.trazo) p.style.strokeWidth = trazoDe(c).ancho / escalaCapa(c.t);
     }
   }
   sobre();
@@ -405,7 +433,7 @@ function empezarFlotante(capas) {
   for (const c of capas) if (c.visible) {
     const costura = lienzo.querySelector(`path[data-costura="${c.id}"]`);
     for (const el of [...lienzo.querySelectorAll(`path.capa[data-id="${c.id}"]`), costura]) el?.style.setProperty('visibility', 'hidden');
-    const capa = `<path class="capa ${c.op}" fill-rule="evenodd" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>`;
+    const capa = pathCapa(c);
     solas += capa;
     html += capa + `<path class="contorno" transform="${marcoCapa(c.t)}" d="${dCapa(c)}"/>` +
       (costura ? `<path class="costura" transform="${marcoCapa(c.t)}" d="${costura.getAttribute('d')}"/>` : '');
@@ -560,7 +588,7 @@ async function pedirExacta() {
   construir3D();
   // los sólidos provisionales, preparados en tiempo libre: si se extruyeran al empezar
   // el arrastre, el primer fotograma tardaría 50–70 ms (medido en shou-circular)
-  requestIdleCallback(() => { for (const c of doc.capas) if (c.visible && c.op === 'unir') solidoCapa(c); });
+  requestIdleCallback(() => { for (const c of doc.capas) if (c.visible && c.op === 'unir' && !c.trazo) solidoCapa(c); });
 }
 
 // ---------- paneles
@@ -600,6 +628,7 @@ function panel() {
       <label>Nodos<input disabled value="${c.anillos.reduce((n, r) => n + r.length, 0)}"></label></div>`;
     if (c.costuras?.length) html += `<div class="fila"><span class="nota" style="padding:0;align-self:center">Costuras: ${c.costuras.length}</span>
       <button id="bCosturas" title="Quitar los cortes pendientes de esta capa">Quitar</button></div>`;
+    html += panelTrazo([c]);
     if (nodos) html += `<p class="nota">Arrastra un nodo o sus tiradores (⌥ los separa) · doble clic en un nodo: esquina ↔ curva ·
       doble clic en el borde añade uno · Supr lo borra · flechas lo empujan.</p>`;
   } else if (selec.length > 1) {
@@ -614,7 +643,7 @@ function panel() {
         ${bot('arriba', '⤒', 'Alinear arriba')}${bot('medio', '↕', 'Centrar en vertical')}${bot('abajo', '⤓', 'Alinear abajo')}</div>
       <div class="fila"><button data-distribuir="0" ${n < 3 ? 'disabled' : ''} title="Mismo hueco en horizontal (3 o más)">Distribuir ↔</button>
         <button data-distribuir="1" ${n < 3 ? 'disabled' : ''} title="Mismo hueco en vertical (3 o más)">Distribuir ↕</button></div>
-      <p class="nota">⇧ + clic suma o quita una capa · arrastrar en vacío selecciona lo que toca el recuadro · ⌘A todo.</p>`;
+      <p class="nota">⇧ + clic suma o quita una capa · arrastrar en vacío selecciona lo que toca el recuadro · ⌘A todo.</p>` + panelTrazo(capasSel());
   } else {
     html += `<p class="nota" style="padding-top:10px">Clic en una forma para seleccionarla (⇧ + clic o un recuadro: varias); doble clic para editar sus nodos.
       R y O dibujan rectángulos y elipses (⇧ = proporción). Rueda desplaza, ⌘/pellizco hace zoom, espacio + arrastrar mueve el lienzo. ? muestra todos los atajos.</p>`;
@@ -630,13 +659,20 @@ function panel() {
     <p class="nota">Unidades: diámetro del símbolo = 1. Grosor y canto de la galería: ${ajustesBase.fondo} y ${ajustesBase.bisel}.</p>`;
   if (generado) html += `<h3>Última generación · ${esc(generado.nombre)} · ${generado.aprobado ? 'APROBADO' : 'RECHAZADO'}</h3>
     <ul class="revision">${generado.comprobaciones.map((c) => `<li class="${c.pasa ? 'pasa' : 'falla'}" title="${esc(c.valor)}">${c.pasa ? 'PASA' : 'FALLA'} · ${esc(c.que)}</li>`).join('')}
-    ${generado.archivos.map((f) => `<li class="archivo">${esc(f)}</li>`).join('')}</ul>`;
+    ${generado.archivos.map((f) => `<li class="archivo">${esc(f)}</li>`).join('')}</ul>` +
+    (generado.comprobaciones.some((c) => c.que === 'trazo fino' && !c.pasa)
+      ? `<div class="fila"><button id="bEngrosar" title="Engrosa lo justo las capas de las piezas que el redondeo se come">Engrosar lo necesario</button></div>` : '');
   $('#props').innerHTML = html;
 }
 
 $('#props').addEventListener('change', (e) => {
   const el = e.target, c = capaSel();
-  if (el.dataset.s) {
+  if (el.id === 'dDesplazar') return;
+  if (el.dataset.tr) {  // el trazo de la capa elegida
+    const v = el.dataset.tr === 'ancho' ? Number(el.value) : el.value;
+    if (el.dataset.tr === 'ancho' && !(v > 0)) return;
+    c.trazo = { ...c.trazo, [el.dataset.tr]: v };
+  } else if (el.dataset.s) {
     const S = doc.simetria ?? { x: -1, y: 1 };
     if (el.dataset.s === 'tipo') { S.lr = ['lr', 'doble'].includes(el.value); S.ab = ['ab', 'doble'].includes(el.value); }
     else [S.x, S.y] = el.value.split(',').map(Number);
@@ -670,6 +706,12 @@ $('#props').addEventListener('click', (e) => {
   if (e.target.dataset.alinear) alinear(e.target.dataset.alinear);
   if (e.target.dataset.distribuir) distribuir(Number(e.target.dataset.distribuir));
   if (e.target.id === 'bCosturas') { delete capaSel().costuras; commit(); }
+  const a = e.target.dataset.trAccion, cs = capasSel();
+  if (a === 'contornear') contornear(cs);
+  if (a === 'convertir') { for (const c of cs) c.trazo = { ...TRAZO }; commit(); }
+  if (a === 'quitar') { for (const c of cs) { delete c.trazo; delete c.abierto; } commit(); }
+  if (e.target.dataset.desplazar) desplazar(cs, Number(e.target.dataset.desplazar) * Number($('#dDesplazar').value || 0));
+  if (e.target.id === 'bEngrosar') engrosar();
 });
 
 // Reordenar arrastrando en la lista (como en Figma): se lleva la capa pulsada o, si está
@@ -779,7 +821,16 @@ $('#dos').addEventListener('pointerdown', (e) => {  // en #dos: las asas viven e
     return;
   }
   if (herramienta === 'pluma') {
-    const ns = pluma?.nodos ?? [], r = dos.getBoundingClientRect(), [fx, fy] = ns.length ? aPantalla(ns[0].p) : [0, 0];
+    const r = dos.getBoundingClientRect(), a8 = (q) => { const [x, y] = aPantalla(q); return Math.hypot(e.clientX - r.left - x, e.clientY - r.top - y) < 8; };
+    if (!pluma && c?.abierto && c.anillos.length === 1) {  // alargar un camino abierto desde un extremo
+      const ns = nodosMundo(c)[0].map((n) => ({ ...n, tipo: 'vivo' }));
+      if (a8(ns.at(-1).p) || a8(ns[0].p)) {
+        const al = a8(ns.at(-1).p) ? ns : ns.reverse().map((n) => ({ ...n, ent: n.sal, sal: n.ent }));
+        pluma = { nodos: al, cursor: al.at(-1).p, alarga: c.id };
+        sobre(); return;
+      }
+    }
+    const ns = pluma?.nodos ?? [], [fx, fy] = ns.length ? aPantalla(ns[0].p) : [0, 0];
     if (ns.length >= 2 && Math.hypot(e.clientX - r.left - fx, e.clientY - r.top - fy) < 8) { cerrarPluma(); return; }  // clic en el primero
     const { p } = iman(m, ns.at(-1)?.p ?? null, e);
     pluma ??= { nodos: [] };
@@ -1067,7 +1118,8 @@ function cajaReal(c) {  // caja de los nodos en el mundo, no la de la caja local
     const [x, y] = aplicar(M, p);
     if (x < b[0]) b[0] = x; if (y < b[1]) b[1] = y; if (x > b[2]) b[2] = x; if (y > b[3]) b[3] = y;
   }
-  return b;
+  const m = margenTrazo(c);  // con su grosor, que va en el mundo
+  return m ? [b[0] - m, b[1] - m, b[2] + m, b[3] + m] : b;
 }
 const unirCajas = (cs) => cs.reduce((b, k) => [Math.min(b[0], k[0]), Math.min(b[1], k[1]), Math.max(b[2], k[2]), Math.max(b[3], k[3])],
   [Infinity, Infinity, -Infinity, -Infinity]);
@@ -1156,6 +1208,7 @@ function insertarNodo(m) {
   const c = capaSel(), ml = aLocal(c.t, m);
   let mejor = { d: Infinity };
   c.anillos.forEach((r, k) => r.forEach((a, i) => {
+    if (c.abierto && i === r.length - 1) return;  // un camino abierto no tiene tramo de cierre
     const P = tramo(r, i);
     if (!P) {
       const b = r[(i + 1) % r.length], [d, t] = distSeg(m, aMundo(c.t, a.p), aMundo(c.t, b.p));
@@ -1183,7 +1236,7 @@ function insertarNodo(m) {
 }
 function borrarNodo() {
   const c = capaSel(), r = c.anillos[nodoSel.k];
-  if (r.length > 3) c.anillos = c.anillos.map((a, k) => k === nodoSel.k ? a.toSpliced(nodoSel.i, 1) : a);
+  if (r.length > (c.abierto ? 2 : 3)) c.anillos = c.anillos.map((a, k) => k === nodoSel.k ? a.toSpliced(nodoSel.i, 1) : a);
   else if (nodoSel.k > 0) c.anillos = c.anillos.toSpliced(nodoSel.k, 1);  // un hueco de 3 nodos desaparece entero
   else return;
   nodoSel = null; commit();
@@ -1216,6 +1269,7 @@ addEventListener('keydown', (e) => {
   if (mod && e.shiftKey && k === 'l') { e.preventDefault(); bloquear(capasSel()); return; }
   if (mod && e.shiftKey && k === 'h') { e.preventDefault(); const cs = capasSel(), ver = !cs.every((x) => x.visible); for (const x of cs) x.visible = ver; commit(); return; }
   if (mod && k === 'r') { e.preventDefault(); renombrar(); return; }
+  if (mod && e.shiftKey && k === 'o') { e.preventDefault(); contornear(capasSel()); return; }
   if (mod && (e.key === '+' || e.key === '=' || e.key === '-')) { e.preventDefault(); zoomPaso(e.key === '-' ? 0.5 : 2); return; }
   if (mod) return;
   if (!$('#ayuda').hidden) { if (e.key === 'Escape' || e.key === '?') ayuda(false); return; }
@@ -1232,7 +1286,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'k') herr('cuchilla');
   else if (k === 'p') herr('pluma');
   else if (e.key === 'Enter' && cuchilla) terminarCorte();
-  else if (e.key === 'Enter' && pluma) cerrarPluma();
+  else if ((e.key === 'Enter' || e.key === 'Escape') && pluma && pluma.nodos.length >= 2) cerrarPluma(true);  // camino abierto
   else if (e.key === 'Escape' && pluma) { pluma = null; marcaIman = null; sobre(); }  // otra vez Esc, a Mover
   else if (e.key === 'Enter' && c) { nodos = !nodos; nodoSel = null; todo(); }
   else if (e.key === 'Escape' && cuchilla) { cuchilla = null; sobre(); }  // cancela la línea; otra vez Esc, a Mover
@@ -1334,20 +1388,32 @@ let cuchilla = null;  // { puntos: [[x, y]...], cursor } en el mundo
 // ---------- pluma
 // Los nodos van en el mundo mientras se dibuja; al cerrar, una capa nueva con el origen en
 // el centro de su caja. Imán y Mayús (15°) como en la cuchilla.
-let pluma = null;  // { nodos, cursor, arrastre: {x, y, movido} mientras el botón sigue pulsado }
-function cerrarPluma() {
-  const ns = pluma?.nodos ?? [];
+// Enter o Esc con 2 nodos o más dejan un camino abierto con trazo (G2); clic en el primer
+// nodo lo cierra (una forma rellena o, si se alargaba un trazo, un trazo cerrado). Un clic
+// en un extremo de un camino abierto elegido lo alarga desde ahí.
+let pluma = null;  // { nodos, cursor, arrastre: {x, y, movido}, alarga: id de la capa que se alarga }
+function cerrarPluma(abierto = false) {
+  const ns = pluma?.nodos ?? [], alarga = pluma?.alarga && doc.capas.find((c) => c.id === pluma.alarga);
   pluma = null; marcaIman = null;
-  if (ns.length < 3 && !(ns.length === 2 && ns.some((n) => n.ent || n.sal))) {
-    todo(); return estado('La pluma necesita 3 nodos (o 2 con curva) para cerrar una forma', true);
+  if (abierto ? ns.length < 2 : ns.length < 3 && !(ns.length === 2 && ns.some((n) => n.ent || n.sal))) {
+    todo(); return estado(abierto ? 'Un camino necesita 2 nodos' : 'La pluma necesita 3 nodos (o 2 con curva) para cerrar una forma', true);
   }
-  const xs = ns.map((n) => n.p[0]), ys = ns.map((n) => n.p[1]);
-  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
   const k = doc.capas.filter((c) => c.nombre.startsWith('Trazado')).length + 1;
-  doc.capas.push({ id: idSig++, nombre: `Trazado ${k}`, op: 'unir', visible: true,
-    anillos: [ns.map((n) => ({ ...n, p: [n.p[0] - cx, n.p[1] - cy] }))], t: { x: cx, y: cy, r: 0, sx: 1, sy: 1 } });
-  selec = [doc.capas.at(-1).id]; nodos = false; herramienta = 'mover';
+  const c = alarga ?? { id: idSig++, nombre: `Trazado ${k}`, op: 'unir', visible: true };
+  if (!alarga) doc.capas.push(c);
+  ponerMundo(c, [ns]);
+  if (abierto) { c.abierto = true; c.trazo ??= { ...TRAZO }; } else delete c.abierto;
+  selec = [c.id]; nodos = false; herramienta = 'mover';
   commit();
+}
+// anillos de nodos en el mundo -> la capa, con el origen en el centro de su caja y t de solo
+// traslación (la pluma, alargar, y lo que devuelve el servidor al contornear o engrosar)
+function ponerMundo(c, anillos) {
+  const pts = anillos.flatMap((a) => aplanar(a, 0.0001, !c.abierto)), xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  c.anillos = anillos.map((a) => a.map((n) => ({ tipo: 'vivo', ...n, p: [n.p[0] - cx, n.p[1] - cy] })));
+  c.t = { x: cx, y: cy, r: 0, sx: 1, sy: 1 };
+  pendiente.delete(c.id);
 }
 $('#dos').addEventListener('dblclick', () => {
   if (!cuchilla) return;
@@ -1361,7 +1427,7 @@ async function terminarCorte() {
   // como la cuchilla de Illustrator: corta todo lo visible que cruza, haya selección o no
   // (limitarla a la selección hacía que el segundo corte, tras seleccionar una pieza, no hiciera nada)
   const objetivo = doc.capas.filter((c) => c.visible);
-  const r = await api('/api/cortar', { linea, capas: objetivo.map((c) => ({ id: c.id, anillos: nodosMundo(c),
+  const r = await api('/api/cortar', { linea, capas: objetivo.map((c) => ({ ...capaMundo(c),
     costuras: (c.costuras ?? []).map((l) => l.map((q) => aMundo(c.t, q))) })) });
   if (r.error) { todo(); return estado(`El corte falló: ${r.error}`, true); }
   // atravesada sin separar: sigue unida por otro lado; la línea queda como costura (en
@@ -1370,6 +1436,9 @@ async function terminarCorte() {
     const c = doc.capas.find((x) => x.id === id);
     c.costuras = [...(c.costuras ?? []), linea.map((q) => aLocal(c.t, q))];
   }
+  if (!r.cortes.length && r.sin_esqueleto?.length && !r.atraviesa.length) {
+    todo(); return estado('Un trazo se corta por su esqueleto (la línea discontinua): la línea tiene que cruzarlo', true);
+  }
   if (!r.cortes.length) {
     commit();
     return estado(r.atraviesa.length
@@ -1377,7 +1446,7 @@ async function terminarCorte() {
       : 'La línea no pasa por ninguna forma');
   }
   let piezas = 0, primera = null;
-  for (const { id, piezas: polis } of r.cortes) {
+  for (const { id, piezas: polis, abiertos } of r.cortes) {
     const i = doc.capas.findIndex((c) => c.id === id), c = doc.capas[i];
     const nuevas = polis.map((poli, k) => {
       // con curvas, las piezas llegan como nodos (curvas partidas por De Casteljau); de una
@@ -1387,7 +1456,8 @@ async function terminarCorte() {
       const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
       const anillos = poli.map((a) => aNodos(a).map((n) => ({ ...n, p: [n.p[0] - cx, n.p[1] - cy] })));
       const sufijo = k < 26 ? String.fromCharCode(97 + k) : String(k + 1);
-      return { id: idSig++, nombre: `${c.nombre} · ${sufijo}`, op: c.op, visible: true, anillos, t: { x: cx, y: cy, r: 0, sx: 1, sy: 1 } };
+      return { id: idSig++, nombre: `${c.nombre} · ${sufijo}`, op: c.op, visible: true, anillos, t: { x: cx, y: cy, r: 0, sx: 1, sy: 1 },
+        ...(c.trazo ? { trazo: { ...c.trazo } } : {}), ...(abiertos?.[k] ? { abierto: true } : {}) };
     });
     doc.capas.splice(i, 1, ...nuevas);
     piezas += nuevas.length; primera ??= nuevas[0].id;
@@ -1459,6 +1529,55 @@ $('#bSubir').addEventListener('click', () => moverCapa(1));
 $('#bBajar').addEventListener('click', () => moverCapa(-1));
 $('#bDuplicar').addEventListener('click', duplicar);
 $('#bBorrar').addEventListener('click', () => selec.length && borrarCapa());
+// ---------- trazos: panel y operaciones (el servidor hace la geometría: /api/contornear,
+// /api/desplazar, /api/engrosar; aquí solo se ponen los resultados en sus capas)
+function panelTrazo(cs) {
+  if (!cs.length) return '';
+  const c = cs.length === 1 ? cs[0] : null, tr = c && trazoDe(c);
+  const opc = (k, pares) => pares.map(([v, n]) => `<option value="${v}" ${tr[k] === v ? 'selected' : ''}>${n}</option>`).join('');
+  let html = '<h3>Trazo</h3>';
+  if (tr) html += `<div class="rejilla">
+      <label>Grosor<input type="number" step="0.005" min="0.001" data-tr="ancho" value="${num(tr.ancho, 4)}"></label>
+      <label>Extremos<select data-tr="extremos">${opc('extremos', [['redondo', 'Redondos'], ['plano', 'Planos'], ['cuadrado', 'Cuadrados']])}</select></label>
+      <label>Uniones<select data-tr="uniones">${opc('uniones', [['redonda', 'Redondas'], ['inglete', 'En inglete'], ['bisel', 'En bisel']])}</select></label>
+      <label>Posición<select data-tr="posicion" ${c.abierto ? 'disabled' : ''}>${opc('posicion', [['centro', 'Centrado'], ['dentro', 'Dentro'], ['fuera', 'Fuera']])}</select></label></div>`;
+  const hay = cs.some((k) => k.trazo), cerradasSin = cs.every((k) => !k.trazo && !k.abierto), cerradasCon = cs.every((k) => k.trazo && !k.abierto);
+  html += `<div class="fila">${hay ? '<button data-tr-accion="contornear" title="El trazo pasa a forma rellena con curvas (⇧⌘O)">Contornear</button>' : ''}
+    ${cerradasSin ? '<button data-tr-accion="convertir" title="La forma pasa a ser el trazo de su contorno">Convertir en trazo</button>' : ''}
+    ${cerradasCon ? '<button data-tr-accion="quitar" title="Vuelve a ser una forma rellena">Quitar trazo</button>' : ''}</div>
+    <div class="fila"><input type="number" id="dDesplazar" step="0.001" min="0" value="0.005" style="width:72px" title="Cuánto por cada lado">
+    <button data-desplazar="1" title="Engrosar: un trazo, su grosor; una forma, su contorno">Engrosar</button><button data-desplazar="-1">Adelgazar</button></div>`;
+  return html;
+}
+function aplicarCambios(lista) {  // lo que devuelve el servidor: por id, anillos en el mundo o un trazo nuevo
+  for (const r of lista) {
+    const c = doc.capas.find((k) => k.id === r.id); if (!c) continue;
+    if (r.trazo) c.trazo = r.trazo;
+    if (r.anillos) { if (r.contorno) { delete c.trazo; delete c.abierto; } ponerMundo(c, r.anillos); }
+  }
+}
+async function contornear(cs) {
+  cs = cs.filter((c) => c.trazo); if (!cs.length) return;
+  const r = await api('/api/contornear', { capas: cs.map(capaMundo) });
+  if (r.error) return estado(r.error, true);
+  aplicarCambios(r.capas.map((k) => ({ ...k, contorno: true })));
+  commit(); estado(`Contorneado(s) ${cs.length} trazo(s): ya son formas con curvas`);
+}
+async function desplazar(cs, d) {
+  if (!cs.length || !d) return;
+  const r = await api('/api/desplazar', { capas: cs.map(capaMundo), d });
+  if (r.error) return estado(r.error, true);
+  aplicarCambios(r.capas); commit();
+  estado(`${d > 0 ? 'Engrosado' : 'Adelgazado'} ${Math.abs(d)} por lado`);
+}
+async function engrosar() {
+  estado('Buscando lo mínimo que hay que engrosar…');
+  const r = await api('/api/engrosar', { capas: capasMundo(), bisel: doc.ajustes.bisel, simetria: doc.simetria });
+  if (r.error) return estado(r.error, true);
+  aplicarCambios(r.capas); generado = null; commit();
+  estado(r.d ? `Engrosadas ${r.capas.length} capa(s) ${num(r.d, 4)} por lado: vuelve a generar` : 'No hacía falta engrosar nada');
+}
+
 // ---------- portapapeles
 // Copiar pone en el portapapeles un SVG de las capas (texto plano: lo lee Figma, Illustrator
 // o cualquier programa) con el JSON exacto de las capas dentro de <metadata>: al pegar en el
@@ -1468,18 +1587,21 @@ $('#bBorrar').addEventListener('click', () => selec.length && borrarCapa());
 let pegarEnSitio = false;
 function svgCapas(cs) {
   const K = 1000, f = (x, y) => `${+(x * K).toFixed(3)} ${+(-y * K).toFixed(3)}`;
-  const trazo = (c) => nodosMundo(c).map((r) => 'M' + f(...r[0].p) + r.map((a, i) => {
+  const trazo = (c) => nodosMundo(c).map((r) => 'M' + f(...r[0].p) + (c.abierto ? r.slice(0, -1) : r).map((a, i) => {
     const b = r[(i + 1) % r.length];
     if (!a.sal && !b.ent) return 'L' + f(...b.p);
     const c1 = a.sal ? [a.p[0] + a.sal[0], a.p[1] + a.sal[1]] : a.p, c2 = b.ent ? [b.p[0] + b.ent[0], b.p[1] + b.ent[1]] : b.p;
     return `C${f(...c1)} ${f(...c2)} ${f(...b.p)}`;
-  }).join('') + 'Z').join('');
+  }).join('') + (c.abierto ? '' : 'Z')).join('');
+  const pinta = (c, color) => { const tr = trazoDe(c); return tr
+    ? `fill="none" stroke="${color}" stroke-width="${+(tr.ancho * K).toFixed(3)}" stroke-linecap="${LINECAP[tr.extremos]}" stroke-linejoin="${LINEJOIN[tr.uniones]}" stroke-miterlimit="${tr.inglete}"`
+    : `fill="${color}" fill-rule="evenodd"`; };
   const B = unirCajas(cs.map(cajaReal)), m = 20;
   const vb = [B[0] * K - m, -B[3] * K - m, (B[2] - B[0]) * K + 2 * m, (B[3] - B[1]) * K + 2 * m].map((v) => +v.toFixed(3));
   const a = doc.ajustes, hex = '#' + new THREE.Color().setRGB(a.color[0], a.color[1], a.color[2], THREE.LinearSRGBColorSpace).getHexString();
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.join(' ')}" width="${vb[2]}" height="${vb[3]}">\n` +
     `<metadata id="x-simbolos">${esc(JSON.stringify(cs))}</metadata>\n` +
-    cs.map((c) => `<path id="${esc(c.nombre)}" fill="${c.op === 'unir' ? hex : '#000'}" fill-rule="evenodd" d="${trazo(c)}"/>`).join('\n') + '\n</svg>\n';
+    cs.map((c) => `<path id="${esc(c.nombre)}" ${pinta(c, c.op === 'unir' ? hex : '#000')} d="${trazo(c)}"/>`).join('\n') + '\n</svg>\n';
 }
 function aPortapapeles(e) {
   if (e.target.matches?.('input, select') || !capasSel().length) return false;
@@ -1627,13 +1749,14 @@ function colocar(m, c) {
 }
 function provisional3D() {
   const grupo = new THREE.Group();
-  for (const c of doc.capas) if (c.visible && c.op === 'unir') {
+  for (const c of doc.capas) if (c.visible && c.op === 'unir' && !c.trazo) {  // un trazo, solo en la exacta
     const m = new THREE.Mesh(solidoCapa(c), laca);
     m.userData = { id: c.id, cache: true };
     colocar(m, c); grupo.add(m);
   }
   const restas = doc.capas.some((c) => c.visible && c.op === 'restar');
-  const falta = [...(restas ? ['las restas'] : []), ...(doc.simetria ? ['la simetría'] : [])].join(' ni ');
+  const trazos = doc.capas.some((c) => c.visible && c.trazo);
+  const falta = [...(restas ? ['las restas'] : []), ...(trazos ? ['los trazos'] : []), ...(doc.simetria ? ['la simetría'] : [])].join(' ni ');
   poner(grupo, `Vista 3D provisional${falta ? ` (sin ${falta})` : ''} · calculando la exacta…`);
 }
 let capas3dPendientes = null;  // como mucho una actualización por fotograma

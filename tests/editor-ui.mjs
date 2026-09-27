@@ -1,7 +1,7 @@
 // Recorrido completo del editor en Chrome: mover, deshacer, escalar, rotar, dibujar,
 // restar, nodos, geometría exacta, guardado automático, generar y nombres protegidos.
 // Uso:  npm run test:ui     (código 1 si algo falla)
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { arrancar, abrirEditor, puntoEnCapa, comprobar, resumen } from './comun.mjs';
 
@@ -496,7 +496,7 @@ try {
     const logo = join(e.salida, 'Logo Prueba.svg');
     writeFileSync(logo, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
       <style>.a{fill:#e30613}</style><circle class="a" cx="50" cy="60" r="40"/>
-      <rect x="110" y="20" width="80" height="80" rx="12"/><path d="M0 0L200 120" fill="none" stroke="#000"/>
+      <rect x="110" y="20" width="80" height="80" rx="12"/><path d="M0 0L200 120" fill="none"/>
       <path d="M100 110q20-30 40 0z"/></svg>`);
     const { p: s } = await abrirEditor(e.chrome, e.url, 'xi-doble');
     const [elegir] = await Promise.all([s.waitForFileChooser(), s.select('#abrir', '+importar')]);
@@ -639,6 +639,72 @@ try {
     const orden = (await capas()).map((c) => c.id), i0 = orden.indexOf(originales[0].id);
     comprobar((await sel())[0] === orden[i0 + 1], 'Tab elige la capa de encima');
     await s.close();
+  }
+
+  // G2: caminos abiertos y trazos (pluma sin cerrar, alargar, grosor en el panel, caja con
+  // el grosor, cuchilla sobre el esqueleto, contornear) y «Engrosar lo necesario»
+  {
+    mkdirSync(join(e.salida, 'editor'), { recursive: true });
+    writeFileSync(join(e.salida, 'editor', 'trazos.json'), JSON.stringify({ version: 2, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] }, capas: [] }));
+    const { p: s } = await abrirEditor(e.chrome, e.url, 'trazos');
+    const cli = (x, y) => s.evaluate(([x, y]) => window.editor.aCliente(x, y), [x, y]);
+    const ultima = () => s.evaluate(() => window.editor.doc().capas.at(-1));
+    await s.keyboard.press('p');
+    for (const [x, y] of [[-0.3, 0.1], [0, 0.1], [0.2, 0.3]]) await s.mouse.click(...await cli(x, y));
+    await s.keyboard.press('Escape');
+    let c = await ultima();
+    comprobar(c?.abierto === true && c.trazo?.ancho > 0 && c.anillos[0].length === 3, `Esc con 3 nodos deja un camino abierto con trazo (${c?.anillos?.[0].length} nodos)`);
+    await s.waitForFunction(() => window.editor.exacta(), { timeout: 30000 });
+    comprobar(/exacta/.test(await s.$eval('#etiqueta2d', (x) => x.textContent)) && (await s.evaluate(() => window.editor.resultado().length)) === 1,
+      'el servidor le da grosor: una pieza en la geometría exacta');
+    // alargar desde el extremo final
+    await s.keyboard.press('p');
+    await s.mouse.click(...await cli(0.2, 0.3));
+    await s.mouse.click(...await cli(0.4, 0.3));
+    await s.keyboard.press('Enter');
+    c = await ultima();
+    comprobar(c.anillos[0].length === 4 && (await s.evaluate(() => window.editor.doc().capas.length)) === 1, 'clic en un extremo y otro punto alarga el mismo camino (4 nodos)');
+    // grosor en el panel
+    await s.$eval('[data-tr=ancho]', (i) => { i.value = '0.05'; i.dispatchEvent(new Event('change', { bubbles: true })); });
+    comprobar((await ultima()).trazo.ancho === 0.05, 'el panel cambia el grosor');
+    // caja con el grosor: un segmento horizontal de ancho 0,03 mide 0,03 de alto
+    await s.keyboard.press('Escape'); await s.keyboard.press('p');
+    await s.mouse.click(...await cli(-0.3, -0.3)); await s.mouse.click(...await cli(0.3, -0.3));
+    await s.keyboard.press('Enter');
+    comprobar(Math.abs(await s.$eval('[data-p=h]', (x) => Number(x.value)) - 0.03) < 1e-9, 'la caja de un segmento de grosor 0,03 mide 0,03 de alto');
+    // la cuchilla lo parte por su esqueleto
+    const n = await s.evaluate(() => window.editor.doc().capas.length);
+    await s.keyboard.press('k');
+    const [k0x, k0y] = await cli(0, -0.2), [k1x, k1y] = await cli(0, -0.4);
+    await s.mouse.move(k0x, k0y); await s.mouse.down(); await s.mouse.move(k1x, k1y, { steps: 6 }); await s.mouse.up();
+    await s.waitForFunction((n) => window.editor.doc().capas.length === n + 1, { timeout: 10000 }, n);
+    const mitades = await s.evaluate(() => window.editor.doc().capas.slice(-2));
+    comprobar(mitades.every((m) => m.abierto && m.trazo.ancho === 0.03 && m.anillos[0].length === 2), 'la cuchilla parte el trazo en dos trazos abiertos');
+    // contornear (⇧⌘O)
+    await s.keyboard.press('Escape'); await s.keyboard.press('Escape');
+    await s.click(`#capas li[data-id="${mitades[0].id}"] .nom`);
+    await s.keyboard.down('Meta'); await s.keyboard.down('Shift'); await s.keyboard.press('o'); await s.keyboard.up('Shift'); await s.keyboard.up('Meta');
+    await s.waitForFunction((id) => !window.editor.doc().capas.find((c) => c.id === id).trazo, { timeout: 10000 }, mitades[0].id);
+    const cont = await s.evaluate((id) => window.editor.doc().capas.find((c) => c.id === id), mitades[0].id);
+    comprobar(!cont.abierto && cont.anillos[0].length >= 4, `⇧⌘O contornea: una forma rellena (${cont.anillos[0].length} nodos)`);
+    await s.close();
+  }
+  {
+    const cuadro = (id, nombre, [x, y, w, h]) => ({ id, nombre, op: 'unir', visible: true, t: { x, y, r: 0, sx: 1, sy: 1 },
+      anillos: [[[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map((p) => ({ p, ent: null, sal: null, tipo: 'vivo' }))] });
+    writeFileSync(join(e.salida, 'editor', 'fino2.json'), JSON.stringify({ version: 2, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      capas: [cuadro(1, 'Cuadrado', [0, 0, 0.4, 0.4]), cuadro(2, 'Trazo fino', [0, 0.35, 0.3, 0.01])] }));
+    const { p: f } = await abrirEditor(e.chrome, e.url, 'fino2');
+    const generar = async () => {
+      await f.click('#bGenerar');
+      await f.waitForFunction(() => !/Generando/.test(document.querySelector('#estado').textContent), { timeout: 120000 });
+      return f.$eval('#estado', (x) => x.textContent);
+    };
+    comprobar(/RECHAZADO/.test(await generar()) && await f.$('#bEngrosar'), 'rechazado por trazo fino: el panel ofrece «Engrosar lo necesario»');
+    await f.click('#bEngrosar');
+    await f.waitForFunction(() => /Engrosadas/.test(document.querySelector('#estado').textContent), { timeout: 120000 });
+    comprobar(/APROBADO/.test(await generar()), `tras engrosar lo necesario, APROBADO (${await f.$eval('#estado', (x) => x.textContent.slice(0, 40))})`);
+    await f.close();
   }
 
   // sugerencias de corte: en la cuchilla se ven las uniones; la barra superior derecha de

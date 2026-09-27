@@ -224,16 +224,17 @@ def ajustar_anillo(anillo, tol=0.0005):
     return fundidos, [t[2] for t in tramos]
 
 
-def aplanar_t(nodos, tol=0.0001):
+def aplanar_t(nodos, tol=0.0001, cerrado=True):
     """Nodos -> polilínea cerrada (sin repetir el primero), con cada punto como
     (x, y, k, t): sale del tramo k (del nodo k al siguiente) en el parámetro t. Cada
     cúbica se parte por la mitad (De Casteljau) hasta que sus tiradores quedan a menos de
     tol de la cuerda. En floats de Python y no numpy: aplanar() de editor.html es esta
     misma, operación por operación, y las dos dan los mismos puntos (lo comprueba
-    tests/test_editor.py)."""
+    tests/test_editor.py). cerrado=False: un camino abierto (sin el tramo del último nodo
+    al primero), que acaba en el último nodo."""
     out = []
     n = len(nodos)
-    for k in range(n):
+    for k in range(n if cerrado else n - 1):
         a, b = nodos[k], nodos[(k + 1) % n]
         (x0, y0), (x3, y3) = a["p"], b["p"]
         out.append((x0, y0, k, 0.0))
@@ -259,12 +260,64 @@ def aplanar_t(nodos, tol=0.0001):
             pila.append((mx, my, fx, fy, cdx, cdy, dx, dy, tm, t1))
             pila.append((ax, ay, abx, aby, ex, ey, mx, my, t0, tm))
         out.pop()  # el último trozo acaba en el nodo siguiente, que pone él mismo
+    if not cerrado and nodos:
+        out.append((*nodos[-1]["p"], n - 1, 0.0))
     return out
 
 
-def aplanar(nodos, tol=0.0001):
-    """Nodos -> polilínea cerrada [[x, y], ...] (ver aplanar_t)."""
-    return [[x, y] for x, y, _, _ in aplanar_t(nodos, tol)]
+def aplanar(nodos, tol=0.0001, cerrado=True):
+    """Nodos -> polilínea [[x, y], ...], cerrada salvo cerrado=False (ver aplanar_t)."""
+    return [[x, y] for x, y, _, _ in aplanar_t(nodos, tol, cerrado)]
+
+
+def partir_camino(nodos, cortes, cerrado):
+    """Un camino de nodos partido en los puntos cortes = [(k, t), ...] (tramo k, parámetro
+    t): los trozos, abiertos, con las curvas partidas por De Casteljau. Cerrado y con un
+    solo corte sale un camino abierto que empieza y acaba en él."""
+    n = len(nodos)
+    tramos = n if cerrado else n - 1
+    cortes = sorted({(k, t) for k, t in cortes if 0 <= k < tramos and 0 <= t <= 1})
+    if not cortes:
+        return [nodos]
+    pos = lambda k, t: k + t  # noqa: E731  (posición a lo largo del camino)
+
+    def punto(k, t):
+        P = controles(nodos, k)
+        return en_bezier(P, t) if P else [nodos[k]["p"][j] + t * (nodos[(k + 1) % n]["p"][j] - nodos[k]["p"][j]) for j in (0, 1)]
+
+    def trozo(a, b):  # nodos de la posición a a la b (a < b), recorriendo tramos
+        out, k = [], int(a[0])
+        while True:
+            t0 = a[1] if k == a[0] else 0.0
+            t1 = b[1] if k == b[0] else 1.0
+            P = controles(nodos, k % n)
+            p0 = punto(k % n, t0)
+            if not out:
+                out.append({"p": p0, "ent": None, "sal": None})
+            if P:
+                Q = sub_bezier(P, t0, t1)
+                out[-1]["sal"] = [Q[1][0] - Q[0][0], Q[1][1] - Q[0][1]]
+                out.append({"p": Q[3], "ent": [Q[2][0] - Q[3][0], Q[2][1] - Q[3][1]], "sal": None})
+            else:
+                out.append({"p": punto(k % n, t1), "ent": None, "sal": None})
+            if k >= b[0]:
+                break
+            k += 1
+        # sin nodos repetidos (un corte justo en un nodo)
+        limpio = [out[0]]
+        for q in out[1:]:
+            if math.dist(q["p"], limpio[-1]["p"]) < 1e-12:
+                limpio[-1]["sal"] = q["sal"]
+            else:
+                limpio.append(q)
+        return limpio
+
+    if cerrado:
+        # los trozos van de un corte al siguiente, y el último da la vuelta hasta el primero
+        cs = cortes + [(cortes[0][0] + n, cortes[0][1])]
+        return [x for x in (trozo(cs[i], cs[i + 1]) for i in range(len(cortes))) if len(x) >= 2]
+    cs = [(0, 0.0)] + cortes + [(n - 2, 1.0)]
+    return [x for x in (trozo(cs[i], cs[i + 1]) for i in range(len(cs) - 1)) if len(x) >= 2]
 
 
 def controles(nodos, k):

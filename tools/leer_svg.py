@@ -25,6 +25,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import shapely
+import shapely.affinity
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import polygonize, unary_union
 
@@ -34,7 +35,10 @@ import curvas  # noqa: E402
 FUERA = {"defs", "clipPath", "mask", "symbol", "pattern", "marker", "linearGradient", "radialGradient",
          "filter", "style", "script", "title", "desc", "metadata", "foreignObject", "text", "image", "use"}
 GRUPOS = {"svg", "g", "a", "switch"}
-HEREDA = ("fill", "fill-rule", "visibility", "fill-opacity")
+HEREDA = ("fill", "fill-rule", "visibility", "fill-opacity", "stroke", "stroke-width", "stroke-opacity",
+          "stroke-linecap", "stroke-linejoin", "stroke-miterlimit")
+EXTREMOS = {"butt": "plano", "round": "redondo", "square": "cuadrado"}
+UNIONES = {"miter": "inglete", "miter-clip": "inglete", "arcs": "inglete", "round": "redonda", "bevel": "bisel"}
 IDENT = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)  # afín [a b c d e f], como matrix() de SVG
 K_ARCO = 4 / 3
 
@@ -158,7 +162,8 @@ def arco(p0, rx, ry, phi, grande, barrido, p1):
 
 
 def subrutas(d):
-    """d="…" -> subrutas, cada una [inicio, [tramo…]] con tramo ("recta", p) o (c1, c2, p)."""
+    """d="…" -> subrutas, cada una [inicio, [tramo…], cerrada] con tramo ("recta", p) o
+    (c1, c2, p); cerrada si acaba en Z (para los trazos: el relleno cierra siempre)."""
     L = Lector(d)
     rutas, cmd, cerrada = [], None, False
     cur = ini = (0.0, 0.0)
@@ -170,6 +175,7 @@ def subrutas(d):
             if cmd in "Zz":
                 if rutas:
                     cur, cerrada = ini, True
+                    rutas[-1][2] = True
                 ultimo_c = ultimo_q = None
                 continue
         elif cmd is None or cmd in "Zz" or not L.hay_numero():
@@ -185,12 +191,12 @@ def subrutas(d):
         ultimo_c = ultimo_q = None
         if C == "M":
             cur = ini = pt(L.num(), L.num())
-            rutas.append([cur, []])
+            rutas.append([cur, [], False])
             cerrada = False
             cmd = "l" if rel else "L"  # los pares que siguen a una M son rectas
             continue
         if not rutas or cerrada:  # dibujar tras Z sin M: otra subruta, desde el inicio de la anterior
-            rutas.append([cur, []])
+            rutas.append([cur, [], False])
             ini, cerrada = cur, False
         tramos = rutas[-1][1]
         if C == "L":
@@ -259,8 +265,9 @@ def elipse(cx, cy, rx, ry):
             f"A{rx},{ry} 0 0 1 {cx},{cy - ry}A{rx},{ry} 0 0 1 {cx + rx},{cy}Z")
 
 
-def trayecto(el, attr):
-    """El d="…" equivalente de una figura básica ("" si no rellena nada)."""
+def trayecto(el, attr, trazo=False):
+    """El d="…" equivalente de una figura básica ("" si no rellena nada). trazo: el camino
+    que se traza, en el que <line> existe y <polyline> no se cierra."""
     f = lambda k, v=0.0: longitud(el.get(k), v)  # noqa: E731
     t = el.tag
     if t == "path":
@@ -272,8 +279,12 @@ def trayecto(el, attr):
         return elipse(f("cx"), f("cy"), f("r"), f("r"))
     if t == "ellipse":
         return elipse(f("cx"), f("cy"), f("rx"), f("ry"))
+    if t == "line" and trazo:
+        return f"M{f('x1')},{f('y1')}L{f('x2')},{f('y2')}"
     if t in ("polygon", "polyline"):
         pts = puntos(el.get("points", ""))
+        if trazo and len(pts) >= 2:
+            return "M" + "L".join(f"{x},{y}" for x, y in pts) + ("Z" if t == "polygon" else "")
         return "M" + "L".join(f"{x},{y}" for x, y in pts) + "Z" if len(pts) >= 3 else ""
     return ""
 
@@ -327,11 +338,35 @@ def rellena(e):
         return True
 
 
+def traza(e):
+    """El grosor del trazo (en unidades de su elemento) o 0 si no se traza."""
+    st = e.get("stroke", "none").strip()
+    if st == "none" or e.get("visibility", "visible") in ("hidden", "collapse"):
+        return 0.0
+    try:
+        if float(e.get("stroke-opacity", 1)) <= 0 or float(e.get("opacity", 1)) <= 0:
+            return 0.0
+    except ValueError:
+        pass
+    return max(0.0, longitud(e.get("stroke-width"), 1.0))
+
+
+def geo_trazo(pts, abierto, w, tr):
+    """El trazo de una polilínea con shapely (como forma_trazo de tools/editor.py)."""
+    kw = {"join_style": {"inglete": "mitre", "redonda": "round", "bisel": "bevel"}[tr["uniones"]],
+          "mitre_limit": tr["inglete"], "quad_segs": 16}
+    if abierto:
+        return LineString(pts).buffer(w / 2, cap_style={"plano": "flat", "redondo": "round", "cuadrado": "square"}[tr["extremos"]], **kw)
+    p = poligono(pts)
+    return p.buffer(w / 2, **kw).difference(p.buffer(-w / 2, **kw))
+
+
 # ---------- anillos
-def a_nodos(ruta, M):
+def a_nodos(ruta, M, cerrar=True):
     """Una subruta en coordenadas del SVG -> anillo de nodos (sin escalar) tras aplicar M.
-    Una afín lleva una Bézier a otra: basta con transformar los controles."""
-    inicio, tramos = ruta
+    Una afín lleva una Bézier a otra: basta con transformar los controles. cerrar=False:
+    un camino abierto (el último nodo no se funde con el primero)."""
+    inicio, tramos = ruta[0], ruta[1]
     P = aplicar(M, inicio)
     segs = [(("recta", aplicar(M, t[1])) if t[0] == "recta" else (aplicar(M, t[0]), aplicar(M, t[1]), aplicar(M, t[2])))
             for t in tramos]
@@ -350,7 +385,7 @@ def a_nodos(ruta, M):
             prev["sal"] = rel(c1, prev["p"])
             nodos.append({"p": q, "ent": rel(c2, q), "sal": None})
     # cerrar: el último nodo sobre el primero se funde con él (su tirador de entrada pasa al primero)
-    if len(nodos) > 1 and math.dist(nodos[-1]["p"], nodos[0]["p"]) < 1e-9 * (1 + abs(P[0]) + abs(P[1])):
+    if cerrar and len(nodos) > 1 and math.dist(nodos[-1]["p"], nodos[0]["p"]) < 1e-9 * (1 + abs(P[0]) + abs(P[1])):
         nodos[0]["ent"] = nodos.pop()["ent"]
     return nodos
 
@@ -456,7 +491,7 @@ def recorrer(el, M, padre, css):
     if tag in GRUPOS:
         for h in el:
             yield from recorrer(h, M, e, css)
-    elif rellena(e):
+    elif rellena(e) or traza(e):
         yield el, M, e
 
 
@@ -473,28 +508,66 @@ def sin_espacios(raiz):
 def leer(texto):
     """Texto de un SVG -> (capas, marco). Cada capa {"nombre", "op", "anillos"} con anillos
     de nodos {"p", "ent", "sal"} ya en el mundo (diámetro 1, centro en el origen, y hacia
-    arriba); marco {"s", "cx", "cy"}: mundo = ((x − cx)·s, −(y − cy)·s)."""
+    arriba); marco {"s", "cx", "cy"}: mundo = ((x − cx)·s, −(y − cy)·s). Un elemento con
+    trazo da además una capa de trazo encima de la de su relleno ({"trazo", "abierto"}),
+    con el grosor escalado; con una escala no uniforme (el grosor variaría), su contorno
+    exacto como relleno."""
     raiz = sin_espacios(ET.fromstring(texto))
     if raiz.tag != "svg":
         raise ValueError("no es un SVG")
     css = reglas_css(raiz)
-    figuras = []
+    figuras = []  # ("relleno", nombre, rutas, regla) | ("trazo", nombre, rutas, abierto, w, tr) | ("contorno", nombre, geo)
     for n, (el, M, e) in enumerate(recorrer(raiz, IDENT, {}, css), 1):
-        d = trayecto(el, e)
+        nombre = el.get("label") or el.get("id") or f"{ {'path': 'Trazado', 'rect': 'Rectángulo', 'circle': 'Círculo', 'ellipse': 'Elipse', 'line': 'Línea'}.get(el.tag, 'Polígono')} {n}"
+        d = trayecto(el, e) if rellena(e) else ""
+        rutas = [a for a in (a_nodos(r, M) for r in subrutas(d)) if len(a) >= 2] if d.strip() else []
+        if rutas:
+            figuras.append(("relleno", nombre, rutas, e.get("fill-rule", "nonzero").strip()))
+        w = traza(e)
+        d = trayecto(el, e, trazo=True) if w > 0 else ""
         if not d.strip():
             continue
-        rutas = [a for a in (a_nodos(r, M) for r in subrutas(d)) if len(a) >= 2]
-        if rutas:
-            nombre = el.get("label") or el.get("id") or f"{ {'path': 'Trazado', 'rect': 'Rectángulo', 'circle': 'Círculo', 'ellipse': 'Elipse'}.get(el.tag, 'Polígono')} {n}"
-            figuras.append((nombre, rutas, e.get("fill-rule", "nonzero").strip()))
+        tr = {"extremos": EXTREMOS.get(e.get("stroke-linecap", "butt").strip(), "plano"),
+              "uniones": UNIONES.get(e.get("stroke-linejoin", "miter").strip(), "inglete"),
+              "inglete": max(1.0, longitud(e.get("stroke-miterlimit"), 4.0)), "posicion": "centro"}
+        det = abs(M[0] * M[3] - M[1] * M[2])
+        a2, b2 = M[0] ** 2 + M[1] ** 2, M[2] ** 2 + M[3] ** 2  # valores singulares de M: iguales si es semejanza
+        uniforme = abs(a2 - b2) <= 1e-4 * max(a2, b2) and abs(M[0] * M[2] + M[1] * M[3]) <= 1e-4 * max(a2, b2)
+        subs = subrutas(d)
+        if uniforme:
+            nombre_t = f"{nombre} · trazo" if rutas else nombre
+            for abierto in (False, True):
+                grupo = [a for a in (a_nodos(r, M, cerrar=not abierto) for r in subs if (not r[2]) == abierto) if len(a) >= 2]
+                if grupo:
+                    figuras.append(("trazo", nombre_t, grupo, abierto, w * math.sqrt(det), tr))
+        else:  # el trazo se hace en las coordenadas del elemento y luego se transforma
+            partes = []
+            for r in subs:
+                a = a_nodos(r, IDENT, cerrar=r[2])
+                pts = curvas.aplanar(a, 1e-4 * w, cerrado=r[2])
+                if len(pts) >= 2:
+                    partes.append(geo_trazo(pts, not r[2], w, tr))
+            if partes:
+                geo = shapely.affinity.affine_transform(unary_union(partes), [M[0], M[2], M[1], M[3], M[4], M[5]])
+                figuras.append(("contorno", f"{nombre} · trazo" if rutas else nombre, geo))
     if not figuras:
-        raise ValueError("no hay ninguna figura rellena (¿solo trazos? pásalos a contornos)")
+        raise ValueError("no hay ninguna figura con relleno ni con trazo")
     # tamaño: la caja de los controles abarca la curva y sirve para fijar la tolerancia con
-    # la que se aplana para medir la de verdad
+    # la que se aplana para medir la de verdad; los trazos cuentan con su grosor
     caja = lambda pts: (min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts))  # noqa: E731
-    x0, y0, x1, y1 = caja([n["p"] for _, rutas, _ in figuras for a in rutas for n in a])
+    x0, y0, x1, y1 = caja([n["p"] for f in figuras if f[0] != "contorno" for a in f[2] for n in a]
+                          + [q for f in figuras if f[0] == "contorno" for q in shapely.get_coordinates(f[2]).tolist()])
     tol = 1e-6 * max(x1 - x0, y1 - y0, 1e-300)
-    pts = [q for _, rutas, _ in figuras for a in rutas for q in polilinea(a, tol)]
+    pts = []
+    for f in figuras:
+        if f[0] == "relleno":
+            pts += [q for a in f[2] for q in polilinea(a, tol)]
+        elif f[0] == "trazo":
+            for a in f[2]:
+                g = geo_trazo(curvas.aplanar(a, tol, cerrado=not f[3]), f[3], f[4], f[5])
+                pts += shapely.get_coordinates(g).tolist()
+        else:
+            pts += shapely.get_coordinates(f[2]).tolist()
     x0, y0, x1, y1 = caja(pts)
     tam = max(x1 - x0, y1 - y0)
     if tam <= 0:
@@ -502,13 +575,23 @@ def leer(texto):
     s, cx, cy = 1 / tam, (x0 + x1) / 2, (y0 + y1) / 2
     mundo_p = lambda p: [(p[0] - cx) * s, -(p[1] - cy) * s]  # noqa: E731
     mundo_v = lambda v: None if v is None else [v[0] * s, -v[1] * s]  # noqa: E731
+    mundo = lambda anillos: [[{"p": mundo_p(n["p"]), "ent": mundo_v(n["ent"]), "sal": mundo_v(n["sal"])} for n in a] for a in anillos]  # noqa: E731
     capas = []
-    for nombre, rutas, regla in figuras:
-        partes = repartir(rutas, "evenodd" if regla == "evenodd" else "nonzero", tam)
-        for j, (op, anillos) in enumerate(partes):
-            capas.append({"nombre": nombre if len(partes) == 1 else f"{nombre} · {j + 1}", "op": op,
-                          "anillos": [[{"p": mundo_p(n["p"]), "ent": mundo_v(n["ent"]), "sal": mundo_v(n["sal"])}
-                                       for n in a] for a in anillos]})
+    for f in figuras:
+        if f[0] == "relleno":
+            _, nombre, rutas, regla = f
+            partes = repartir(rutas, "evenodd" if regla == "evenodd" else "nonzero", tam)
+            for j, (op, anillos) in enumerate(partes):
+                capas.append({"nombre": nombre if len(partes) == 1 else f"{nombre} · {j + 1}", "op": op, "anillos": mundo(anillos)})
+        elif f[0] == "trazo":
+            _, nombre, rutas, abierto, w, tr = f
+            capas.append({"nombre": nombre, "op": "unir", "anillos": mundo(rutas), "trazo": {**tr, "ancho": w * s},
+                          **({"abierto": True} if abierto else {})})
+        else:
+            geo = shapely.affinity.affine_transform(f[2], [s, 0, 0, -s, -cx * s, cy * s])
+            anillos = [curvas.ajustar_anillo(list(a.coords)[:-1], 0.0002)[0] for p in getattr(geo, "geoms", [geo])
+                       if p.geom_type == "Polygon" for a in [p.exterior, *p.interiors]]
+            capas.append({"nombre": f[1], "op": "unir", "anillos": anillos})
     return capas, {"s": s, "cx": cx, "cy": cy}
 
 
