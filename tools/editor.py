@@ -796,14 +796,35 @@ def malla(nombre, doc, capas, carpeta, ligera=False, base=None):
     base: la planta ya combinada, si se tiene (generar la reutiliza para la ligera)."""
     a = doc["ajustes"]
     base = planta(capas, doc.get("simetria"), doc.get("grupos")) if base is None else base
-    geo = acabar(base, float(a["bisel"]), LIGERA["esquina"] if ligera else None)
+    esquina = LIGERA["esquina"] if ligera else None
+    geo = acabar(base, float(a["bisel"]), esquina)
     if geo.is_empty:
         raise ValueError("no queda ninguna forma que generar")
+    (_, fondo), *altos = niveles(capas, base, float(a["fondo"]), doc.get("simetria"))
+    # cada altura, 10 µm más hacia dentro que la de debajo: donde tocan el mismo borde, sus
+    # contornos coincidían, los vértices se fundían y la malla dejaba de ser cerrada
+    relieves = [(g, f) for g, f in ((acabar(g, float(a["bisel"]), esquina).buffer(-1e-5 * k, join_style="mitre"), f)
+                                    for k, (g, f) in enumerate(altos, 1)) if not g.is_empty]
     for sub in ("glb", "svg"):
         (Path(carpeta) / sub).mkdir(parents=True, exist_ok=True)
-    return s.exportar(geo, nombre, fondo=float(a["fondo"]), bisel=float(a["bisel"]),
+    return s.exportar(geo, nombre, fondo=fondo, bisel=float(a["bisel"]),
                       color=[float(v) for v in a["color"]], pasos=LIGERA["pasos"] if ligera else None,
-                      carpeta=carpeta)
+                      carpeta=carpeta, relieves=relieves)
+
+
+def niveles(capas, base, fondo, simetria=None):
+    """Grosor por capa ("fondo" en la capa; si no, el del símbolo): cada punto de la planta
+    tiene el mayor de las capas que unen y lo cubren. [(forma, grosor)] de menor a mayor: la
+    primera es la planta entera con el grosor más bajo; las demás, lo que sube a cada altura
+    (recortado a la planta, así las restas lo atraviesan todo, y con su simetría)."""
+    grosor = lambda c: float(c.get("fondo") or fondo)
+    suman = [c for c in capas if c.get("op", "unir") == "unir"]
+    alturas = sorted({grosor(c) for c in suman}) or [fondo]
+    out = [(base, alturas[0])]
+    for f in alturas[1:]:
+        m = unary_union([shapely.set_precision(forma_de(c), PRECISION) for c in suman if grosor(c) >= f])
+        out.append((base.intersection(simetrizar(m, simetria)), f))
+    return out
 
 
 def revisar(glb, base, bisel):
@@ -879,7 +900,7 @@ def previa(doc, capas):
 # al guardar.
 CAMPOS = {
     "doc": {"version", "origen", "capas", "ajustes", "simetria", "guias", "grupos"},
-    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto", "grupo", "forma", "copia"},
+    "capa": {"id", "nombre", "op", "visible", "anillos", "t", "costuras", "bloqueada", "trazo", "abierto", "grupo", "forma", "copia", "fondo"},
     "grupo": {"id", "nombre", "op", "booleana", "visible", "abierto", "bloqueada", "grupo", "componente", "instancia", "m"},
     "nodo": {"p", "ent", "sal", "tipo", "radio"},
 }

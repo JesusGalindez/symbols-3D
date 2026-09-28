@@ -104,6 +104,28 @@ def test_exportar_con_parametros_no_toca_los_globales(tmp_path):
     assert abs(alto - 0.12) < 1e-6
 
 
+def test_grosor_por_capa(tmp_path):
+    """Cada punto sube lo que la capa más gruesa que lo cubre; las restas lo atraviesan todo;
+    un relieve que toca el borde de lo de debajo (o de otro relieve) no rompe la malla."""
+    cuadro = lambda x0, y0, x1, y1, **k: {"op": "unir", "anillos": [[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], **k}  # noqa: E731
+    doc = {"ajustes": {"fondo": 0.07, "bisel": 0.008, "color": [1, 0, 0, 1]}}
+    capas = [cuadro(-.5, -.5, .5, .5), cuadro(-.5, -.5, 0, .5, fondo=0.1), cuadro(.6, -.1, .8, .1, fondo=0.03),
+             {**cuadro(-.05, -.6, .05, .6), "op": "restar"}]
+    base = editor.planta(capas)
+    niveles = editor.niveles(capas, base, 0.07)
+    assert [f for _, f in niveles] == [0.03, 0.07, 0.1]
+    assert niveles[0][0].equals(base)
+    assert not niveles[2][0].intersects(Point(0.3, 0)) and niveles[2][0].contains(Point(-0.3, 0))
+    assert not niveles[2][0].contains(Point(-0.02, 0))  # la resta también corta el relieve
+    info = editor.malla("relieve", doc, capas, tmp_path)
+    assert info["estanca"] and info["biseladas"] == info["piezas"]
+    assert all(ok for _, ok, _ in editor.revisar(tmp_path / "glb" / "relieve.glb", base, 0.008))
+    m = trimesh.load(tmp_path / "glb" / "relieve.glb", force="mesh")
+    assert abs(m.vertices[:, 2].min()) < 1e-9 and abs(m.vertices[:, 2].max() - 0.1) < 1e-6
+    # sin grosores propios, la misma malla que antes: una sola altura
+    assert editor.niveles(capas[:1], editor.planta(capas[:1]), 0.07) == [(editor.planta(capas[:1]), 0.07)]
+
+
 def test_no_pisa_un_simbolo_aprobado(salida):
     doc = editor.piezas_svg("shou-cruz")
     with pytest.raises(ValueError, match="no salió del editor"):

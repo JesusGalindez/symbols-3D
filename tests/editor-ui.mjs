@@ -1250,6 +1250,48 @@ try {
     await s.close();
   }
 
+  // grosor por capa desde la vista 3D: clic en la pieza la elige, la flecha la sube, el GLB
+  // lleva las dos alturas y aprueba; doble clic en la flecha vuelve al grosor del símbolo
+  {
+    const cuadro = (id, nombre, x0, y0, x1, y1) => ({ id, nombre, op: 'unir', visible: true, t: { x: 0, y: 0, r: 0, sx: 1, sy: 1 },
+      anillos: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map((q) => ({ p: q, ent: null, sal: null, tipo: 'vivo' }))] });
+    writeFileSync(join(e.salida, 'editor', 'relieve.json'), JSON.stringify({ version: 3, origen: null, ajustes: { fondo: 0.07, bisel: 0.008, color: [0.6, 0.05, 0.03, 1] },
+      capas: [cuadro(1, 'Base', -0.5, -0.5, 0.5, 0.5), cuadro(2, 'Centro', -0.2, -0.2, 0.2, 0.2)] }));
+    const { p: r, errores: err } = await abrirEditor(e.chrome, e.url, 'relieve');
+    const real = () => r.waitForFunction(() => /Acabado real/.test(document.querySelector('#etiqueta3d').textContent), { timeout: 30000 });
+    await real();
+    const tri1 = await r.evaluate(() => window.editor.triangulos3d());
+    const pto = await r.evaluate(() => window.editor.enPantalla3d(0.1, 0.1, 0.07));
+    await r.mouse.click(...pto);
+    comprobar(JSON.stringify(await r.evaluate(() => window.editor.seleccion())) === '[2]', 'clic en la pieza del 3D elige su capa');
+    comprobar(await r.$eval('#grosor3d', (x) => !x.hidden && /0,07 \(del símbolo\)/.test(x.textContent)), 'la flecha dice el grosor del símbolo');
+    const f = await r.evaluate(() => window.editor.enPantalla3d(...window.editor.flecha3d()));
+    await r.mouse.move(...f); await r.mouse.down(); await r.mouse.move(f[0], f[1] - 20, { steps: 4 }); await r.mouse.move(f[0], f[1] - 40, { steps: 4 });
+    const fondoVivo = await r.evaluate(() => window.editor.doc().capas[1].fondo);
+    await r.mouse.up();
+    const fondo = await r.evaluate(() => window.editor.doc().capas[1].fondo);
+    comprobar(fondo === fondoVivo && fondo > 0.07 && fondo <= 0.09 && Math.abs(fondo * 1000 - Math.round(fondo * 1000)) < 1e-9, `40 px hacia arriba suben como mucho 0,02 (0,0005 por píxel a lo largo de la flecha), en pasos de 0,001 (${fondo})`);
+    comprobar(await r.$eval('[data-p="fondo"]', (x) => Number(x.value)) === fondo, 'el panel de la capa enseña su grosor');
+    comprobar(await r.evaluate(() => window.editor.doc().capas[0].fondo) === undefined, 'la otra capa no cambia');
+    await r.waitForFunction((t) => /Acabado real/.test(document.querySelector('#etiqueta3d').textContent) && window.editor.triangulos3d() > t, { timeout: 30000 }, tri1);
+    comprobar(true, 'la malla real llega con el relieve (más triángulos)');
+    await r.$eval('#nombre', (x) => { x.value = 'relieve-prueba'; });
+    await r.click('#bGenerar');
+    await r.waitForFunction(() => /triángulos/.test(document.querySelector('#estado').textContent), { timeout: 60000 });
+    comprobar(await r.$$eval('.revision li.falla', (l) => l.length) === 0, 'el GLB con dos alturas pasa la revisión');
+    await r.keyboard.down('Meta'); await r.keyboard.press('z'); await r.keyboard.up('Meta');
+    comprobar(await r.evaluate(() => window.editor.doc().capas[1].fondo) === undefined, 'deshacer quita el grosor en un solo paso');
+    await r.keyboard.down('Meta'); await r.keyboard.down('Shift'); await r.keyboard.press('z'); await r.keyboard.up('Shift'); await r.keyboard.up('Meta');
+    const f2 = await r.evaluate(() => window.editor.enPantalla3d(...window.editor.flecha3d()));
+    await r.mouse.click(...f2, { clickCount: 2 });
+    await r.waitForFunction(() => window.editor.doc().capas[1].fondo === undefined, { timeout: 5000 }).catch(() => {});
+    comprobar(await r.evaluate(() => window.editor.doc().capas[1].fondo) === undefined, 'doble clic en la flecha vuelve al grosor del símbolo');
+    await r.$eval('[data-p="fondo"]', (x) => { x.value = '0,2*0,5'; x.dispatchEvent(new Event('change', { bubbles: true })); });
+    comprobar(await r.evaluate(() => window.editor.doc().capas[1].fondo) === 0.1, 'el campo Grosor 3D acepta operaciones (0,2*0,5 = 0,1)');
+    comprobar(!err.some((x) => !x.startsWith('sin cargar')), `sin errores en la página ${err.join(' | ')}`);
+    await r.close();
+  }
+
   // zoom con pellizco (⌃ + rueda): durante el gesto el lienzo va escalado por CSS; tiene
   // que coincidir con lo que se redibuja al acabar, y el punto bajo el cursor no se mueve
   const cajaCapa = () => p.$eval('#lienzo path.capa', (el) => { const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; });

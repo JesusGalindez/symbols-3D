@@ -222,22 +222,27 @@ def suavizar(m):
     # y los triángulos largos de la tapa la estiran en rayas de luz
     nv = m.vertex_normals.copy()
     z = m.vertices[:, 2]
+    # con relieves (grosor por capa) hay un frente por altura: el de cada cara plana hacia +z
+    for f in np.unique(np.round(z[m.faces[m.face_normals[:, 2] > 0.9999]], 9)):
+        nv[np.isclose(z, f) & (nv[:, 2] > 0.9)] = [0, 0, 1]
     nv[np.isclose(z, z.max())] = [0, 0, 1]
     nv[np.isclose(z, z.min())] = [0, 0, -1]
     m.vertex_normals = nv
     return m
 
 
-def exportar(geo, nombre, fondo=None, bisel=None, color=None, pasos=None, carpeta=None):
+def exportar(geo, nombre, fondo=None, bisel=None, color=None, pasos=None, carpeta=None, relieves=()):
     """Geometría 2D normalizada -> svg/<nombre>.svg y glb/<nombre>.glb con canto
     redondeado, laca roja y normales finales. Común a símbolos y letras.
     Sin argumentos usa los globales del módulo, leídos al llamar (redibujar.py y
-    letras.py cambian PASOS para la versión ligera); carpeta: otra raíz de salida."""
+    letras.py cambian PASOS para la versión ligera); carpeta: otra raíz de salida.
+    relieves: [(geo, fondo)], partes que suben más que el resto: cada una es su propio
+    sólido desde el mismo dorso (z = 0), metido en el de debajo."""
     carpeta = Path(carpeta or RAIZ)
     svg(geo, carpeta / "svg" / f"{nombre}.svg")
     mallas, biseladas = [], 0
-    for p in lista(geo):
-        m, ok = pieza(p, (fondo or FONDO) * DIAMETRO, (bisel or BISEL) * DIAMETRO, pasos)
+    for p, f in [(p, fondo) for p in lista(geo)] + [(p, f) for g, f in relieves for p in lista(g)]:
+        m, ok = pieza(p, (f or FONDO) * DIAMETRO, (bisel or BISEL) * DIAMETRO, pasos)
         mallas.append(m)
         biseladas += ok
     estanca = all(m.is_watertight for m in mallas)

@@ -152,6 +152,7 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
 #sobre .medida{stroke:#ff4a3d;stroke-width:1;pointer-events:none}
 #sobre .medida-texto{fill:#fff;font-size:10px;paint-order:stroke;stroke:#ff4a3d;stroke-width:3px;stroke-linejoin:round;pointer-events:none}
 .etiqueta{position:absolute;left:10px;bottom:8px;color:var(--tenue);font-size:11px;pointer-events:none}
+.rotulo3d{position:absolute;padding:2px 6px;border-radius:4px;background:#0d99ff;color:#fff;font-size:11px;pointer-events:none;white-space:nowrap}
 </style>
 <script type="importmap">
 {"imports":{"three":"./vendor/three@0.170.0/build/three.module.js",
@@ -239,6 +240,8 @@ aside h3{margin:0;padding:10px 12px 6px;font-size:11px;font-weight:600;color:var
     <dt>⌥ con algo elegido</dt><dd>Medir distancias (a la capa bajo el ratón o al círculo)</dd><dt>⇧R</dt><dd>Reglas; arrastrar desde una saca una guía (de vuelta a la regla, se borra)</dd>
     <dt>⇧1 · ⇧2 · ⇧0</dt><dd>Ajustar a todo · a la selección · 100 %</dd><dt>⌘+ · ⌘−</dt><dd>Acercar · alejar</dd></dl>
   <h4>Campos</h4><dl><dt>Arrastrar la etiqueta</dt><dd>Cambia el valor (⇧: más fino)</dd><dt>⌥] · ⌥[</dt><dd>Engrosar · adelgazar 0,001 por lado (⇧: 0,005)</dd><dt>↔ Arrastrar (Trazo)</dt><dd>Engrosar o adelgazar viendo el resultado</dd><dt>0,2*3 · (1+2)/4</dt><dd>Operaciones</dd><dt>+0,01 · *2 · /2</dt><dd>Sobre el valor actual</dd><dt>50%</dt><dd>Del valor actual</dd></dl>
+  <h4>Vista 3D</h4><dl><dt>Clic en una pieza</dt><dd>Elige su capa (⇧: suma o quita)</dd><dt>Arrastrar la flecha</dt><dd>Sube o baja el grosor de lo elegido: 0,001 cada 2 px (⇧: 0,0002, cinco veces más fino)</dd>
+    <dt>Doble clic en la flecha</dt><dd>Vuelve al grosor del símbolo</dd></dl>
   <h4>Archivos</h4><dl><dt>Abrir → Importar SVG…</dt><dd>Un logotipo con sus curvas, una capa por figura</dd>
     <dt>⇧⌘E · Exportar</dt><dd>SVG (diseño o selección, con curvas) y PNG 1×, 2×, 4×</dd><dt>Historial · ⌥⌘S</dt><dd>Copias con miniatura: comparar y restaurar · guardar una versión con nombre</dd><dt>Generar GLB</dt><dd>Detallada, ligera y web, con su revisión</dd>
     <dt>? · Esc</dt><dd>Abrir y cerrar esta ayuda</dd></dl>
@@ -401,7 +404,7 @@ function nodosMundo(c) {
 }
 const capasMundo = () => doc.capas.filter((c) => c.visible).map(capaMundo);
 const capaMundo = (c) => ({ id: c.id, nombre: c.nombre, op: c.op, anillos: nodosMundo(c), ...(c.trazo ? { trazo: c.trazo } : {}),
-  ...(c.abierto ? { abierto: true } : {}), ...(c.grupo ? { grupo: c.grupo } : {}) });
+  ...(c.abierto ? { abierto: true } : {}), ...(c.grupo ? { grupo: c.grupo } : {}), ...(c.fondo ? { fondo: c.fondo } : {}) });
 // Grupos (G5): doc.capas sigue siendo la pila de capas (hojas) en orden de pintado y
 // doc.grupos los grupos; capas y grupos dicen su padre en «grupo». Los miembros de un grupo
 // van seguidos en la pila (normalizar()). Un grupo no tiene transformación propia: moverlo
@@ -468,7 +471,7 @@ function sincronizarInstancias() {
     const [a, b, cc, d] = I.m, L = (v) => v && [a * v[0] + cc * v[1], b * v[0] + d * v[1]];
     const nuevas = maestras.map((c, i) => {
       const h = { id: hijas[i]?.id ?? idSig++, nombre: c.nombre, op: c.op, visible: c.visible, grupo: I.id, copia: true,
-        ...(c.trazo ? { trazo: { ...c.trazo } } : {}), ...(c.abierto ? { abierto: true } : {}) };
+        ...(c.trazo ? { trazo: { ...c.trazo } } : {}), ...(c.abierto ? { abierto: true } : {}), ...(c.fondo ? { fondo: c.fondo } : {}) };
       ponerMundo(h, rel(c).map((r) => r.map((n) => ({ ...n, p: aplicar(I.m, n.p), ent: L(n.ent), sal: L(n.sal), tipo: n.tipo ?? 'vivo' }))));
       return h;
     });
@@ -1026,7 +1029,8 @@ function panel() {
       <label>Ancho<input type="text" inputmode="decimal" step="0.005" min="0.001" data-p="w" value="${num((b[2] - b[0]) * Math.abs(c.t.sx))}"></label>
       <label>Alto<input type="text" inputmode="decimal" step="0.005" min="0.001" data-p="h" value="${num((b[3] - b[1]) * Math.abs(c.t.sy))}"></label>
       <label>Rotación °<input type="text" inputmode="decimal" step="1" data-p="r" value="${num(c.t.r * 180 / Math.PI, 1)}"></label>
-      <label>Nodos<input disabled value="${c.anillos.reduce((n, r) => n + r.length, 0)}"></label></div>`;
+      <label>Nodos<input disabled value="${c.anillos.reduce((n, r) => n + r.length, 0)}"></label>
+      <label title="Cuánto sube esta capa en 3D; vacío: el del símbolo. También con la flecha de la vista 3D">Grosor 3D<input type="text" inputmode="decimal" step="0.005" min="0.005" data-p="fondo" placeholder="${num(a.fondo)}" value="${c.fondo ? num(c.fondo, 4) : ''}"></label></div>`;
     if (c.costuras?.length) html += `<div class="fila"><span class="nota" style="padding:0;align-self:center">Costuras: ${c.costuras.length}</span>
       <button id="bCosturas" title="Quitar los cortes pendientes de esta capa">Quitar</button></div>`;
     if (c.forma) html += panelForma(c.forma);
@@ -1148,6 +1152,10 @@ $('#props').addEventListener('change', (e) => {
       const k = new THREE.Color(el.value);  // sRGB del selector -> lineal, como glTF
       a.color = [num(k.r, 4), num(k.g, 4), num(k.b, 4), 1];
     } else { const v = evaluar(el.value, a[el.dataset.g]); if (v > 0) a[el.dataset.g] = v; }
+  } else if (el.dataset.p === 'fondo' && c) {  // grosor propio de la capa; vacío: el del símbolo
+    const v = el.value.trim() ? evaluar(el.value, c.fondo ?? doc.ajustes.fondo) : 0;
+    if (!(v >= 0)) { el.blur(); return panel(); }
+    ponerFondo(c, v);
   } else if (c) {
     const p = el.dataset.p, b = caja(c);
     const actual = { x: c.t.x, y: c.t.y, r: c.t.r * 180 / Math.PI, w: (b[2] - b[0]) * Math.abs(c.t.sx), h: (b[3] - b[1]) * Math.abs(c.t.sy) }[p];
@@ -1271,7 +1279,7 @@ document.addEventListener('pointerdown', (e) => {
   const label = e.target.closest?.('#props .rejilla label'), inp = label?.querySelector('input[inputmode="decimal"]');
   if (label && inp && e.target !== inp && !inp.disabled) {
     const clave = [...inp.attributes].find((a) => a.name.startsWith('data-'));
-    arrastreCampo = { selector: `[${clave.name}="${clave.value}"]`, x: e.clientX, v0: evaluar(inp.value, 0), paso: PASO_CAMPO[clave.value] ?? 0.001, desde: puntero };
+    arrastreCampo = { selector: `[${clave.name}="${clave.value}"]`, x: e.clientX, v0: evaluar(inp.value || inp.placeholder, 0), paso: PASO_CAMPO[clave.value] ?? 0.001, desde: puntero };
     e.preventDefault(); return;
   }
   if (e.target.closest?.('.tirador-desplazar') && capasSel().length) {
@@ -1344,7 +1352,7 @@ function irA(i) {
   if (herramienta === 'cuchilla') pedirSugerencias();
 }
 function todo() {
-  dibujar(); capasUI(); panel();
+  dibujar(); capasUI(); panel(); ponerFlecha();
   document.querySelectorAll('[data-herr]').forEach((b) => b.classList.toggle('activo', b.dataset.herr === herramienta));
   $('#bNodos').classList.toggle('activo', nodos);
   titulo();
@@ -2621,8 +2629,8 @@ function poner(obj, etiqueta) {
 // contorno un canto entero y en las esquinas que entran (redondeadas a 0,6 × canto) lo
 // cruzaba consigo mismo: caras torcidas en los huecos que el GLB no tiene. El canto de
 // verdad llega con la malla real del servidor (pedirMalla).
-function extruir(polis) {  // [[exterior, hueco...], ...] -> sólido de caras rectas
-  const { fondo, color } = doc.ajustes;
+function extruir(polis, fondo = doc.ajustes.fondo) {  // [[exterior, hueco...], ...] -> sólido de caras rectas
+  const { color } = doc.ajustes;
   laca.color.setRGB(color[0], color[1], color[2], THREE.LinearSRGBColorSpace);
   const limpio = (r) => { const p = r.map(([x, y]) => new THREE.Vector2(x, y)); if (p.length > 1 && p[0].equals(p.at(-1))) p.pop(); return p; };
   const formas = polis.map((poli) => {
@@ -2630,9 +2638,8 @@ function extruir(polis) {  // [[exterior, hueco...], ...] -> sólido de caras re
     f.holes = poli.slice(1).map((r) => new THREE.Path(limpio(r)));
     return f;
   });
-  const g = new THREE.ExtrudeGeometry(formas, { depth: fondo, curveSegments: 1, bevelEnabled: false });
-  g.translate(0, 0, -fondo / 2);
-  return g;
+  // de z = 0 a z = fondo, como el GLB: todas las piezas comparten el dorso
+  return new THREE.ExtrudeGeometry(formas, { depth: fondo, curveSegments: 1, bevelEnabled: false });
 }
 function construir3D() {
   poner(new THREE.Mesh(extruir(resultado), laca), 'Planta exacta, sin canto · calculando el acabado real…');
@@ -2656,20 +2663,21 @@ async function pedirMalla() {
   new GLTFLoader().parse(datos, '', (g) => { if (id === peticion) poner(g.scene, 'Acabado real (la malla que se genera)'); });
 }
 // Mientras se edita, el 3D sigue al ratón: cada capa que une es su propio sólido, extruido
-// una vez en coordenadas locales y colocado con su t; arrastrar solo cambia su matriz.
+// una vez en coordenadas locales, con grosor 1, y colocado con su t y su grosor (escala en z);
+// arrastrar, también la flecha del grosor, solo cambia su matriz.
 // Las restas y el redondeo aparecen cuando llega la geometría exacta.
-const solidos = new WeakMap();  // anillos -> { g, clave }
+const solidos = new WeakMap();  // anillos -> { g }
 function solidoCapa(c) {
-  const clave = `${doc.ajustes.fondo},${doc.ajustes.bisel}`;
   let s = solidos.get(c.anillos);
-  if (!s || s.clave !== clave) { s = { g: extruir([plano(c)]), clave }; solidos.set(c.anillos, s); }
+  if (!s) { s = { g: extruir([plano(c)], 1) }; solidos.set(c.anillos, s); }
   return s.g;
 }
 function colocar(m, c) {
   const P = pendiente.get(c.id);  // con cizalla (escalar varias sin proporción), la matriz tal cual
   m.matrixAutoUpdate = !P;
-  if (P) m.matrix.set(P[0], P[2], 0, P[4], P[1], P[3], 0, P[5], 0, 0, 1, 0, 0, 0, 0, 1);
-  else { const t = c.t; m.position.set(t.x, t.y, 0); m.rotation.set(0, 0, t.r); m.scale.set(t.sx, t.sy, 1); }
+  const f = fondoDe(c);
+  if (P) m.matrix.set(P[0], P[2], 0, P[4], P[1], P[3], 0, P[5], 0, 0, f, 0, 0, 0, 0, 1);
+  else { const t = c.t; m.position.set(t.x, t.y, 0); m.rotation.set(0, 0, t.r); m.scale.set(t.sx, t.sy, f); }
 }
 function provisional3D() {
   const grupo = new THREE.Group();
@@ -2697,6 +2705,118 @@ function seguir3D(capas) {
     }
   });
 }
+// ---------- grosor desde el 3D
+// Cada capa puede tener su grosor (c.fondo; sin él, el del símbolo). En el GLB cada punto
+// sube lo que la capa más gruesa que lo cubre (editor.py: niveles()). Con capas elegidas,
+// una flecha sobre su cara de delante: arrastrarla sube o baja su grosor viendo los sólidos
+// provisionales (solo cambia su escala en z) y al soltar llega la malla real.
+const fondoDe = (c) => c.fondo ?? doc.ajustes.fondo;
+function ponerFondo(c, v) {  // v <= 0 o el del símbolo: sin grosor propio
+  v = Math.round(v * 1e4) / 1e4;
+  if (v > 0 && Math.abs(v - doc.ajustes.fondo) > 1e-9) c.fondo = v; else delete c.fondo;
+}
+const AZUL = 0x0d99ff;
+const flecha = new THREE.Group();
+{
+  const mat = new THREE.MeshBasicMaterial({ color: AZUL, depthTest: false, transparent: true });
+  const palo = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.7, 12), mat);
+  const punta = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.3, 20), mat);
+  const toque = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.1, 8), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  palo.position.y = 0.35; punta.position.y = 0.85; toque.position.y = 0.55;
+  for (const m of [palo, punta, toque]) { m.renderOrder = 10; flecha.add(m); }
+  flecha.rotation.x = Math.PI / 2;  // de +y a +z
+  flecha.visible = false; escena.add(flecha);
+}
+const rotulo3d = document.createElement('div');
+rotulo3d.id = 'grosor3d'; rotulo3d.className = 'rotulo3d'; rotulo3d.hidden = true; caja3.append(rotulo3d);
+let arrastreFondo = null;
+const conFondo = () => capasSel().filter((c) => c.visible);
+function ponerFlecha() {  // sobre el centro de lo elegido, en la cara más alta
+  const cs = conFondo();
+  flecha.visible = cs.length > 0 && !nodos;
+  if (flecha.visible) {
+    const B = cajaGrupo(cs);
+    flecha.position.set((B[0] + B[2]) / 2, (B[1] + B[3]) / 2, Math.max(...cs.map(fondoDe)));
+  }
+  rotuloFlecha(); pintar3d = true;
+}
+function rotuloFlecha() {
+  const cs = conFondo();
+  rotulo3d.hidden = !flecha.visible;
+  if (!flecha.visible) return;
+  const fs = [...new Set(cs.map(fondoDe))];
+  rotulo3d.textContent = `Grosor ${fs.length === 1 ? String(num(fs[0], 4)).replace('.', ',') : 'varios'}${cs.every((c) => c.fondo == null) ? ' (del símbolo)' : ''}`;
+  const r = caja3.getBoundingClientRect(), q = flecha.position.clone().project(camara);
+  rotulo3d.style.left = `${(q.x + 1) / 2 * r.width + 14}px`; rotulo3d.style.top = `${(1 - q.y) / 2 * r.height - 10}px`;
+}
+function tamanoFlecha() {  // del mismo tamaño en pantalla a cualquier distancia
+  if (!flecha.visible) return;
+  flecha.scale.setScalar(camara.position.distanceTo(flecha.position) * 0.1);
+  rotuloFlecha();
+}
+const rayo = new THREE.Raycaster();
+function rayoDe(e) {
+  const r = render.domElement.getBoundingClientRect();
+  rayo.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), camara);
+  return rayo;
+}
+function capaEn3D(e) {  // la capa bajo el ratón: los sólidos provisionales, sin añadirlos a la escena
+  const ms = doc.capas.filter((c) => c.visible && !c.bloqueada && c.op === 'unir' && !c.trazo).map((c) => {
+    const m = new THREE.Mesh(solidoCapa(c)); m.userData.id = c.id; colocar(m, c); m.updateMatrixWorld(); return m;
+  });
+  // a la misma distancia (caras a la misma altura), la de más arriba en la pila, como en el lienzo
+  const hs = rayoDe(e).intersectObjects(ms), cerca = hs.filter((h) => h.distance < hs[0].distance + 1e-6).map((h) => h.object.userData.id);
+  return doc.capas.findLast((c) => cerca.includes(c.id));
+}
+let clic3d = null;
+caja3.addEventListener('pointerdown', (e) => {  // en captura: antes que OrbitControls
+  if (e.button !== 0 || !doc) return;
+  if (flecha.visible && rayoDe(e).intersectObject(flecha, true).length) {
+    e.stopPropagation(); e.preventDefault();
+    render.domElement.setPointerCapture(e.pointerId);
+    // hacia dónde apunta la flecha en pantalla; mirando de frente no se ve: hacia arriba
+    const o = flecha.position, a = o.clone().project(camara), b = o.clone().add(new THREE.Vector3(0, 0, 0.1)).project(camara);
+    const r = caja3.getBoundingClientRect(), v = [(b.x - a.x) * r.width, -(b.y - a.y) * r.height], l = Math.hypot(...v);
+    const px = l < 5 ? [0, -1] : [v[0] / l, v[1] / l];
+    const cs = conFondo();
+    arrastreFondo = { x: e.clientX, y: e.clientY, px, cs, f0: new Map(cs.map((c) => [c.id, fondoDe(c)])), movido: false };
+    if (!(modelo?.children?.length && modelo.children.every((m) => m.userData.cache))) provisional3D();
+    return;
+  }
+  clic3d = { x: e.clientX, y: e.clientY };
+}, true);
+caja3.addEventListener('pointermove', (e) => {
+  const A = arrastreFondo;
+  if (!A) { render.domElement.style.cursor = flecha.visible && rayoDe(e).intersectObject(flecha, true).length ? 'ns-resize' : ''; return; }
+  // 0,0005 por píxel a lo largo de la flecha, a cualquier distancia (⇧: cinco veces menos)
+  const [ux, uy] = A.px, d = ((e.clientX - A.x) * ux + (e.clientY - A.y) * uy) * 0.0005 * (e.shiftKey ? 0.2 : 1);
+  const paso = e.shiftKey ? 0.0002 : 0.001;
+  for (const c of A.cs) ponerFondo(c, Math.max(0.005, Math.round((A.f0.get(c.id) + d) / paso) * paso));
+  A.movido = true;
+  for (const m of modelo?.children ?? []) { const c = A.cs.find((k) => k.id === m.userData.id); if (c) colocar(m, c); }
+  ponerFlecha();
+  estado(`Grosor ${rotulo3d.textContent.replace(/^Grosor /, '')} · suelta para aplicar (⇧: más fino)`);
+});
+caja3.addEventListener('pointerup', (e) => {
+  if (arrastreFondo) {
+    const A = arrastreFondo; arrastreFondo = null;
+    if (A.movido) { estado(''); commit(); } else ponerFlecha();
+    return;
+  }
+  const C = clic3d; clic3d = null;
+  if (!C || Math.hypot(e.clientX - C.x, e.clientY - C.y) > 4) return;  // eso era girar la cámara
+  const c = capaEn3D(e);
+  if (!c) { if (!e.shiftKey && selec.length) { selec = []; nodos = false; todo(); } return; }
+  const id = elegible(c);
+  selec = e.shiftKey ? (selec.includes(id) ? selec.filter((x) => x !== id) : [...selec, id]) : [id];
+  nodos = false; todo();
+});
+caja3.addEventListener('dblclick', (e) => {  // en la flecha: vuelve al grosor del símbolo
+  if (!flecha.visible || !rayoDe(e).intersectObject(flecha, true).length) return;
+  for (const c of conFondo()) delete c.fondo;
+  commit();
+});
+
 function encuadrar() {  // como visor.html: la esfera que envuelve el símbolo cabe en el campo de visión
   const pts = doc.capas.filter((c) => c.visible).flatMap((c) => anillosMundo(c).flat());
   if (!pts.length) return;
@@ -2718,7 +2838,7 @@ new ResizeObserver(() => { tamano3d(); if (doc) vistaCambiada(); }).observe(caja
 (function bucle(ahora = performance.now()) {
   requestAnimationFrame(bucle);
   seguirZoom(Math.min(ahora - ultimoFotograma, 100)); ultimoFotograma = ahora;
-  if (controles.update() || pintar3d) { pintar3d = false; render.render(escena, camara); dibujados3d++; }
+  if (controles.update() || pintar3d) { pintar3d = false; tamanoFlecha(); render.render(escena, camara); dibujados3d++; }
 })();
 
 // ---------- archivos
@@ -2938,7 +3058,8 @@ $('#archivoSvg').addEventListener('change', async (e) => {
 });
 
 // para las pruebas de tests/: estado de solo lectura
-window.editor = { triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado, seleccion: () => selec, aplanar, redondear, svgDiseno, png, restaurar, elegirNodos: (n) => { nodosMulti = capaSel().anillos[0].slice(0, n).map((_, i) => ({ k: 0, i })); nodoSel = nodosMulti[0]; sobre(); }, medidas: () => medida, evaluar };
+window.editor = { enPantalla3d: (x, y, z) => { const r = caja3.getBoundingClientRect(), q = new THREE.Vector3(x, y, z).project(camara); return [r.left + (q.x + 1) / 2 * r.width, r.top + (1 - q.y) / 2 * r.height]; },
+  flecha3d: () => flecha.visible && [flecha.position.x, flecha.position.y, flecha.position.z + 0.55 * flecha.scale.z], triangulos3d: () => { let n = 0; modelo?.traverse((o) => { if (o.geometry) n += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; }); return n; }, guias: () => guiasMover, marca: () => marcaIman, bordes: () => bordes, aCliente: (x, y) => { const r = dos.getBoundingClientRect(), [px, py] = aPantalla([x, y]); return [r.left + px, r.top + py]; }, dibujados3d: () => dibujados3d, distancia3d: () => camara.position.distanceTo(controles.target), doc: () => doc, exacta: () => exacta, resultado: () => resultado, guardado: () => JSON.stringify(doc) === guardado, seleccion: () => selec, aplanar, redondear, svgDiseno, png, restaurar, elegirNodos: (n) => { nodosMulti = capaSel().anillos[0].slice(0, n).map((_, i) => ({ k: 0, i })); nodoSel = nodosMulti[0]; sobre(); }, medidas: () => medida, evaluar };
 
 const lista = await api('/api/simbolos');
 ajustesBase = lista.ajustes;
